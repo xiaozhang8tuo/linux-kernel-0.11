@@ -1,5 +1,5 @@
 ; !   setup.s程序主要用于读取机器的硬件配置参数，并把内核模块system移动到适当的内存位置处。
-; !	setup.s		(C) 1991 Linus Torvalds
+; !	setup.s		(C) 1991 Linus Torvalds 实模式下运行的16位代码程序,Intel汇编，as86 的 as和ld
 ; !
 ; ! setup.s is responsible for getting the system data from the BIOS,
 ; ! and putting them into the appropriate places in system memory.

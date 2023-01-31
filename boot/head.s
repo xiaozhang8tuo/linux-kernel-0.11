@@ -1,5 +1,5 @@
 /*	head.s程序会被编译连接在system模块的最前部分，主要进行硬件设备的探测设置和内存管理页面的初始设置工作。
- *  linux/boot/head.s
+ *  linux/boot/head.s 保护模式下运行, AT&T的汇编语法 GNU的as 和 ld 
  *
  *  (C) 1991  Linus Torvalds
  */
