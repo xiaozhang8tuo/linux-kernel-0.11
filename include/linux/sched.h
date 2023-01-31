@@ -107,7 +107,7 @@ struct task_struct {
 };
 
 /*
- *  INIT_TASK is used to set up the first task table, touch at
+ *  INIT_TASK is used to set up the first task table, touch at //第一个任务task0
  * your own risk!. Base=0, limit=0x9ffff (=640kB)
  */
 #define INIT_TASK \

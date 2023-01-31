@@ -91,7 +91,7 @@ _system_call:
 	mov %dx,%es
 	movl $0x17,%edx		# fs points to local data space
 	mov %dx,%fs
-	call _sys_call_table(,%eax,4)
+	call _sys_call_table(,%eax,4) # 间接调用 _sys_call_table + %eax*4 处的函数 表中的函数指针4字节一个
 	pushl %eax
 	movl _current,%eax
 	cmpl $0,state(%eax)		# state

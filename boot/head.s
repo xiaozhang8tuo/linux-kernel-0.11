@@ -1,4 +1,4 @@
-/*
+/*	head.s程序会被编译连接在system模块的最前部分，主要进行硬件设备的探测设置和内存管理页面的初始设置工作。
  *  linux/boot/head.s
  *
  *  (C) 1991  Linus Torvalds

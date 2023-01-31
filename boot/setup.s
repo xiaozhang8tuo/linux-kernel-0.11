@@ -1,16 +1,16 @@
-!
-!	setup.s		(C) 1991 Linus Torvalds
-!
-! setup.s is responsible for getting the system data from the BIOS,
-! and putting them into the appropriate places in system memory.
-! both setup.s and system has been loaded by the bootblock.
-!
-! This code asks the bios for memory/disk/other parameters, and
-! puts them in a "safe" place: 0x90000-0x901FF, ie where the
-! boot-block used to be. It is then up to the protected mode
-! system to read them from there before the area is overwritten
-! for buffer-blocks.
-!
+; !   setup.s程序主要用于读取机器的硬件配置参数，并把内核模块system移动到适当的内存位置处。
+; !	setup.s		(C) 1991 Linus Torvalds
+; !
+; ! setup.s is responsible for getting the system data from the BIOS,
+; ! and putting them into the appropriate places in system memory.
+; ! both setup.s and system has been loaded by the bootblock.
+; !
+; ! This code asks the bios for memory/disk/other parameters, and
+; ! puts them in a "safe" place: 0x90000-0x901FF, ie where the
+; ! boot-block used to be. It is then up to the protected mode
+; ! system to read them from there before the area is overwritten
+; ! for buffer-blocks.
+; !
 
 ! NOTE! These had better be the same as in bootsect.s!
 

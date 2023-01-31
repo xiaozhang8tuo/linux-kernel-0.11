@@ -1,8 +1,8 @@
-!
-! SYS_SIZE is the number of clicks (16 bytes) to be loaded.
-! 0x3000 is 0x30000 bytes = 196kB, more than enough for current
-! versions of linux
-!
+; ! bootsect.s程序是磁盘引导块程序，编译后会驻留在磁盘的第一个扇区中（引导扇区，0磁道（柱面），0磁头，第1个扇区)。在PC机加电ROM BIOS自检后，将被BIOS加载到内存Ox7C00处进行执行。
+; ! SYS_SIZE is the number of clicks (16 bytes) to be loaded.
+; ! 0x3000 is 0x30000 bytes = 196kB, more than enough for current
+; ! versions of linux
+; !
 SYSSIZE = 0x3000
 !
 !	bootsect.s		(C) 1991 Linus Torvalds
