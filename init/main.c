@@ -21,6 +21,17 @@
  * some others too.
  */
 static inline _syscall0(int,fork)
+/*
+static line int fork(void) 
+{ 
+	long __res;
+	__asm__ volatile ("int $0x80" : "=a" (__res) : "0" (__NR_fork));
+	if (__res >= 0) 
+		return (int) __res;
+	errno = -__res;
+	return -1; 
+}
+*/
 static inline _syscall0(int,pause)
 static inline _syscall1(int,setup,void *,BIOS)
 static inline _syscall0(int,sync)

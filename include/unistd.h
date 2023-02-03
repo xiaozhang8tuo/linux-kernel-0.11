@@ -134,12 +134,12 @@
 type name(void) \
 { \
 long __res; \
-__asm__ volatile ("int $0x80" \
-	: "=a" (__res) \
-	: "0" (__NR_##name)); \
-if (__res >= 0) \
+__asm__ volatile ("int $0x80" \      //调用系统中断 0x80
+	: "=a" (__res) \                 //返回值--> eax(__res)
+	: "0" (__NR_##name)); \          //系统中断参数 --> eax(_NR_##name)   嵌入汇编结束
+if (__res >= 0) \                    //如果返回值>=0 调用成功返回该值
 	return (type) __res; \
-errno = -__res; \
+errno = -__res; \                    //否则设置出错号,并返回-1
 return -1; \
 }
 
