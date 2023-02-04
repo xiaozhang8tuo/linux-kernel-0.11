@@ -1,9 +1,9 @@
 #
 # Makefile for the FREAX-kernel.
 #
-# Note! Dependencies are done automagically by 'make dep', which also
-# removes any old dependencies. DON'T put your own dependencies here
-# unless it's something special (ie not a .c file).
+# 注意！依赖关系是由'make dep'自动进行的，它也会自动去除原来的依赖信息。不要把你自己的
+# 依赖关系信息放在这里，除非是特别文件的（也即不是一个.c文件的信息）。
+
 #
 
 AR	=gar
@@ -28,6 +28,8 @@ OBJS  = sched.o system_call.o traps.o asm.o fork.o \
 	panic.o printk.o vsprintf.o sys.o exit.o \
 	signal.o mktime.o
 
+# 在有了先决条件OBJS后使用下面的命令连接成目标kernel.o。
+# 选项’-r’用于指示生成可重定位的输出，即产生可以作为链接器ld输入的目标文件。
 kernel.o: $(OBJS)
 	$(LD) -r -o kernel.o $(OBJS)
 	sync
@@ -38,7 +40,14 @@ clean:
 	(cd chr_drv; make clean)
 	(cd blk_drv; make clean)
 	(cd math; make clean)
-
+# 下面的目标或规则用于检查各文件之间的依赖关系。方法如下：
+# 使用字符串编辑程序sed对Makefile文件（这里即是自己）进行处理，输出为删除Makefile
+# 文件中'##Dependencies'行后面的所有行（下面从51开始的行），并生成tmp_make
+# 临时文件(43行的作用)。然后对kernel./目录下的每一个C文件执行gcc预处理操作
+# -M标志告诉预处理程序输出描述每个目标文件相关性的规则，并且这些规则符合make语法。
+# 对于每一个源文件，预处理程序输出一个make规则，其结果形式是相应源程序文件的目标
+# 文件名加上其依赖关系-一该源文件中包含的所有头文件列表。把预处理结果都添加到临时
+# 文件tmp_make中，然后将该临时文件复制成新的Makefile文件。
 dep:
 	sed '/\#\#\# Dependencies/q' < Makefile > tmp_make
 	(for i in *.c;do echo -n `echo $$i | sed 's,\.c,\.s,'`" "; \
