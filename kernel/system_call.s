@@ -5,6 +5,16 @@
  */
 
 /*
+	system_call.s文件包含系统调用(system-cal1)底层处理子程序。由于有些代码比较类似，所以
+同时也包括时钟中断处理(timer-interrupt)句柄。硬盘和软盘的中断处理程序也在这里。
+	注意：这段代码处理信号(signal)识别，在每次时钟中断和系统调用之后都会进行识别。一般
+中断过程并不处理信号识别，因为会给系统造成混乱。
+	从系统调用返回('ret_from_system_cal1')时堆栈的内容见上面19-30行。
+
+	上面Linus原注释中的一般中断过程是指除了系统调用中断(int0x80)和时钟中断(int0x20)
+以外的其他中断。这些中断会在内核态或用户态随机发生，若在这些中断过程中也处理信号识别的
+话，就有可能与系统调用中断和时钟中断过程中对信号的识别处理过程相冲突，，违反了内核代码
+非抢占原则。因此系统既无必要在这些“其他”中断中处理信号，也不允许这样做。
  *  system_call.s  contains the system-call low-level handling routines.
  * This also contains the timer-interrupt handler, as some of the code is
  * the same. The hd- and flopppy-interrupts are also here.
@@ -30,9 +40,9 @@
  *	2C(%esp) - %oldss
  */
 
-SIG_CHLD	= 17
+SIG_CHLD	= 17          # 定义SIG_CHLD信号(子进程停止或结束)
 
-EAX		= 0x00
+EAX		= 0x00			  # 堆栈中各个寄存器的偏移位置
 EBX		= 0x04
 ECX		= 0x08
 EDX		= 0x0C
@@ -42,14 +52,15 @@ DS		= 0x18
 EIP		= 0x1C
 CS		= 0x20
 EFLAGS		= 0x24
-OLDESP		= 0x28
+OLDESP		= 0x28		  # 当特权级变化时栈会切换，用户栈指针会被保存到内核态栈中
 OLDSS		= 0x2C
 
-state	= 0		# these are offsets into the task-struct.
-counter	= 4
-priority = 8
-signal	= 12
-sigaction = 16		# MUST be 16 (=len of sigaction)
+# 以下这些是任务结构(task_struct)中变量的偏移值，参见include,/1inux/sched.h,77行开始。
+state	= 0		# these are offsets into the task-struct. 进程状态码
+counter	= 4     										# 任务运行时间计数(递减),滴答数，运行时间片 
+priority = 8										    # 运行优先级,任务开始时counter=priority，越大则运行时间越长
+signal	= 12											# 信号位图，每个比特位代表一种信号，信号=位偏移值+1
+sigaction = 16		# MUST be 16 (=len of sigaction)    # sigaction结构长度必须16字节，信号执行属性结构数组的偏移值，
 blocked = (33*16)
 
 # offsets within sigaction
