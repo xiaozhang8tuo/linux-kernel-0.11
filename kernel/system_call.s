@@ -23,7 +23,17 @@
  * after a timer-interrupt and after each system call. Ordinary interrupts
  * don't handle signal-recognition, as that would clutter them up totally
  * unnecessarily.
- *
+https://zhuanlan.zhihu.com/p/64914472 直接、立即、间接、索引、基址寻址
+地址或偏移(%基址或偏移量寄存器, %索引寄存器, 比例因子)
+地址的计算公式是：
+最终地址 = 地址或偏移 + %基址或偏移量寄存器 + %索引寄存器  * 比例因子
+
+movl ADDRESS, %eax 					直接 # 访问那块内存 1:a val in address 2:read four bytes start at 2000 3: load the val in eas register 
+movl $2, %ebx	   					立即 # 数字2  
+movl (%eax), %ebx  					间接 # 访问eax寄存器里的数值所代表的地址。
+movl 0xFFFF0000(,%eax,4), %ebx		索引 # 从0xFFFF0000地址开始，加上%eax * 4作为索引的最终地址。
+movl 4(%eax), %ebx					基址 # eax寄存器里的数值作为基址，加上4得到最终地址。
+
  * Stack layout in 'ret_from_system_call':
  *
  *	 0(%esp) - %eax
@@ -57,66 +67,103 @@ OLDSS		= 0x2C
 
 # 以下这些是任务结构(task_struct)中变量的偏移值，参见include,/1inux/sched.h,77行开始。
 state	= 0		# these are offsets into the task-struct. 进程状态码
-counter	= 4     										# 任务运行时间计数(递减),滴答数，运行时间片 
+counter	= 4     										# 任务运行时间计数(递减),滴答数，运行时间片
 priority = 8										    # 运行优先级,任务开始时counter=priority，越大则运行时间越长
 signal	= 12											# 信号位图，每个比特位代表一种信号，信号=位偏移值+1
-sigaction = 16		# MUST be 16 (=len of sigaction)    # sigaction结构长度必须16字节，信号执行属性结构数组的偏移值，
-blocked = (33*16)
+sigaction = 16		# MUST be 16 (=len of sigaction)    # sigaction结构长度必须16字节，信号执行属性结构数组的偏移值，对应信号将要执行的操作和标志信息
+blocked = (33*16)										# 受阻塞信号位图的偏移量
 
+# 以下定义在sigaction结构中的偏移量，参见include/signal.h,
 # offsets within sigaction
-sa_handler = 0
-sa_mask = 4
-sa_flags = 8
-sa_restorer = 12
+sa_handler = 0											# 信号处理过程的句柄(描述符)
+sa_mask = 4												# 信号屏蔽码
+sa_flags = 8											# 信号集
+sa_restorer = 12										# 恢复函数指针(kernel/signal.c)
 
-nr_system_calls = 72
+nr_system_calls = 72									# 系统调用总数
 
 /*
- * Ok, I get parallel printer interrupts while using the floppy for some
+ * Ok, I get parallel printer interrupts while using the floppy for some 在使用软驱时,收到了并行打印机中断，暂时忽略
  * strange reason. Urgel. Now I just ignore them.
  */
 .globl _system_call,_sys_fork,_timer_interrupt,_sys_execve
 .globl _hd_interrupt,_floppy_interrupt,_parallel_interrupt
 .globl _device_not_available, _coprocessor_error
 
-.align 2
-bad_sys_call:
+# 错误的系统调用号
+.align 2                                                  # 内存四字节对齐
+bad_sys_call:                                             # eax中置-1,退出中断
 	movl $-1,%eax
 	iret
+
+# 重新执行调度程序入口,调度程序schedule在(kernel/sched.c)
+# 当调度程序schedule()返回时就从ret_from_sys_call处继续执行
 .align 2
 reschedule:
-	pushl $ret_from_sys_call
+	pushl $ret_from_sys_call                              # 将ret_from_sys_call的地址入栈
 	jmp _schedule
+
+# int0x80 --linux系统调用入口点(调用中断int0x80,eax中时调用号)
 .align 2
 _system_call:
-	cmpl $nr_system_calls-1,%eax
+	cmpl $nr_system_calls-1,%eax                          # 调用号如果超出范围的话就在eax中置-1并退出
 	ja bad_sys_call
-	push %ds
+	push %ds											  # 保存原段寄存器值
 	push %es
 	push %fs
+
+; 一个系统调用最多可带有3个参数，也可以不带参数。下面入栈的ebx、ecx和edx中放着系统
+; 调用相应C语言函数（见第94行）的调用参数。这几个寄存器入栈的顶序是由GNU GCC规定的
+; ebx中可存放第1个参数，ecx中存放第2个参数，edx中存放第3个参数
+; 系统调用语句可参见头文件include/unistd.h中第133到183行的系统调用宏。
 	pushl %edx
 	pushl %ecx		# push %ebx,%ecx,%edx as parameters
 	pushl %ebx		# to the system call
 	movl $0x10,%edx		# set up ds,es to kernel space
 	mov %dx,%ds
-	mov %dx,%es
+	mov %dx,%es											  # ds,es指向内核数据段(全局描述符表中数据段描述符)
+
+; fs指向局部数据段（局部描述符表中数据段描述符），即指向执行本次系统调用的用户程序的数据段
+; 注意，在Liux0.11中内核给任务分配的代码和数据内存段是重叠的，它们的段基址和段限长相同。
+; 参见fork.c程序中copy_mem()函数。
 	movl $0x17,%edx		# fs points to local data space
 	mov %dx,%fs
 	call _sys_call_table(,%eax,4) # 间接调用 _sys_call_table + %eax*4 处的函数 表中的函数指针4字节一个
-	pushl %eax
-	movl _current,%eax
-	cmpl $0,state(%eax)		# state
+	pushl %eax                    # 把系统调用的返回值入栈
+; 下面128-132行查看当前任务的运行状态。如果不在就绪状态(state不等于0)就去执行调度
+; 程序。如果该任务在就绪状态，但其时间片已用完(counter=0),则也去执行调度程序。
+; 例如当后台进程组中的进程执行控制终端读写操作时，那么默认条件下该后台进程组所有进程
+; 会收到SIGTTIN或SIGTTOU信号，导致进程组中所有进程处于停止状态。而当前进程则会立刻
+; 返回。
+	movl _current,%eax                     				# 取当前任务(进程)数据结构地址-->eax 
+	cmpl $0,state(%eax)		# state						# 取当前任务状态 基址寻址
 	jne reschedule
-	cmpl $0,counter(%eax)		# counter
+	cmpl $0,counter(%eax)		# counter               # 检查时间片
 	je reschedule
+
+; 以下这段代码执行从系统调用C函数返回后，对信号进行识别处理。其他中断服务程序退出时也
+; 将跳转到这里进行处理后才退出中断过程，例如后面131行上的处理器出错中断it16。
 ret_from_sys_call:
+; 首先判别当前任务是否是初始任务task0,如果是则不必对其进行信号量方面的处理，直接返回。
+; 140行上的_task对应C程序中的task[]数组，直接引用task相当于引用task[0]。
 	movl _current,%eax		# task[0] cannot have signals
 	cmpl _task,%eax
 	je 3f
-	cmpw $0x0f,CS(%esp)		# was old code segment supervisor ?
+
+; 通过对原调用程序代码选择符的检查来判断调用程序是否是用户任务。如果不是则直接退出中断。
+; 这是因为任务在内核态执行时不可抢占。否则对任务进行信号量的识别处理。这里比较选择符是否
+; 为用户代码段的选择符0x000F(RPL=3,局部表，第1个段（代码段）)来判断是否为用户任务。如
+; 果不是则说明是某个中断服务程序跳转到第136行的，于是跳转退出中断程序。如果原堆栈段选择   
+; 符不为0x17(即原堆栈不在用户段中)，也说明本次系统调用的调用者不是用户任务，则也退出。
+	cmpw $0x0f,CS(%esp)		# was old code segment supervisor ? # 判断在发生时钟中断前，CS 表示的是不是 LDT 第 1 项 (局部变量表的代码段), 否则 CS 就应该内核态代码段了，不进行信号量处理
 	jne 3f
-	cmpw $0x17,OLDSS(%esp)		# was stack segment = 0x17 ?
+	cmpw $0x17,OLDSS(%esp)		# was stack segment = 0x17 ?  判断在发生时钟中断前，SS 表示的是不是 LDT 第 2 项 (局部变量表的数据段) 否则认为程序还处在内核态，不进行信号量处理
 	jne 3f
+
+; 下面这段代码(109-120)用于处理当前任务中的信号。首先取当前任务结构中的信号位图(32位：
+; 每位代表1种信号)，然后用任务结构中的信号阻塞（屏蔽）码，阻塞不允许的信号位，取得数值
+; 最小的信号值，再把原信号位图中该信号对应的位复位（置0），最后将该信号值作为参数之一调
+; 用do_signal(0。do_signal0在(kernel/signal..c,82)中，其参数包括13个入栈的信息。
 	movl signal(%eax),%ebx
 	movl blocked(%eax),%ecx
 	notl %ecx
