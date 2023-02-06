@@ -164,18 +164,35 @@ ret_from_sys_call:
 ; 每位代表1种信号)，然后用任务结构中的信号阻塞（屏蔽）码，阻塞不允许的信号位，取得数值
 ; 最小的信号值，再把原信号位图中该信号对应的位复位（置0），最后将该信号值作为参数之一调
 ; 用do_signal(0。do_signal0在(kernel/signal..c,82)中，其参数包括13个入栈的信息。
-	movl signal(%eax),%ebx
-	movl blocked(%eax),%ecx
-	notl %ecx
-	andl %ebx,%ecx
-	bsfl %ecx,%ecx
+
+;BSF(Bit Scan Forward): 位扫描, 低 -> 高          mov ebx, 000011100b;bsf eax, ebx// eax=2
+;BSR(Bit Scan Reverse): 位扫描, 高 -> 低
+;它们的结果影响 ZF
+;扫描的是参数二, 找到是 1 的位后, 把位置数给参数一并置 ZF=0
+;找不到(也就是参数二是 0)时, 置 ZF=1
+
+;BT(Bit Test):                 位测试
+;BTS(Bit Test and Set):        位测试并置位
+;BTR(Bit Test and Reset):      位测试并复位
+;BTC(Bit Test and Complement): 位测试并取反
+;它们的结果影响 CF
+;它们的指令格式相同:
+
+	movl signal(%eax),%ebx      # 取信号位图-->ebx, 每一位代表一种信号,共32个信号
+	movl blocked(%eax),%ecx		# 取阻塞(屏蔽)信号位图-->ecx
+	notl %ecx					# 每位取反
+	andl %ebx,%ecx				# 获得许可的信号位图
+	bsfl %ecx,%ecx				# 从低位（位0）开始扫描位图，看是否有1的位，       bsf (bit scan forward):位扫描 从低到高
+								# 若有，则ecx保留该位的偏移值（即第几位0-31）。
+								# 如果没有信号则向前跳转退出。
 	je 3f
-	btrl %ecx,%ebx
-	movl %ebx,signal(%eax)
-	incl %ecx
-	pushl %ecx
-	call _do_signal
-	popl %eax
+	btrl %ecx,%ebx              # 复位该信号(ebx含有原signal位图)     把ebx的第ecx位信号复位
+	movl %ebx,signal(%eax)		# 重新保存signal位图信息->current.signal
+	incl %ecx					# 将信号调整为从1开始的整数(1-32)
+	pushl %ecx					# 信号值入栈作为do_signal的参数
+	call _do_signal				# kernel/signal.c
+	popl %eax					# 弹出入栈的信号值
+
 3:	popl %eax
 	popl %ebx
 	popl %ecx
@@ -185,6 +202,10 @@ ret_from_sys_call:
 	pop %ds
 	iret
 
+; int16--处理器错误中断。类型：错误：无错误码。
+; 这是一个外部的基于硬件的异常。当协处理器检测到自己发生错误时，就会通过ERROR引脚
+; 通知CPU。下面代码用于处理协处理器发出的出错信号。并跳转去执行 C 函数math_errorO
+; (kernel/math/math_emulate.c,82)。返回后跳转到标号ret_from_sys_call处继续执行。
 .align 2
 _coprocessor_error:
 	push %ds
@@ -194,14 +215,22 @@ _coprocessor_error:
 	pushl %ecx
 	pushl %ebx
 	pushl %eax
-	movl $0x10,%eax
+	movl $0x10,%eax            # ds es 置为指向内核数据段
 	mov %ax,%ds
 	mov %ax,%es
-	movl $0x17,%eax
+	movl $0x17,%eax            # fs指向局部数据段(出错程序的数据段)
 	mov %ax,%fs
-	pushl $ret_from_sys_call
-	jmp _math_error
+	pushl $ret_from_sys_call   # 把下面的调用返回地址入栈
+	jmp _math_error			   # 执行C函数 math_error()
 
+; #int7-一设备不存在或协处理器不存在。类型：错误：无错误码。
+; 如果控制寄存器CR0中EM(模拟)标志置位，则当CPU执行一个协处理器指令时就会引发该
+; 中断，这样CPU就可以有机会让这个中断处理程序模拟协处理器指令(169行)。
+; CR0的交换标志TS是在CPU执行任务转换时设置的。TS可以用来确定什么时候协处理器中的
+; 内容与CPU正在执行的任务不匹配了。当CPU在运行一个协处理器转义指令时发现TS置位时，
+; 就会引发该中断。此时就可以保存前一个任务的协处理器内容，并恢复新任务的协处理器执行
+; 状态(176行)。参见kernel,/sched.c,92行。该中断最后将转移到标号ret_from_sys_call1
+; 处执行下去（检测并处理信号）。
 .align 2
 _device_not_available:
 	push %ds
@@ -211,25 +240,34 @@ _device_not_available:
 	pushl %ecx
 	pushl %ebx
 	pushl %eax
-	movl $0x10,%eax
+	movl $0x10,%eax                     # ds es指向内核数据段
 	mov %ax,%ds
 	mov %ax,%es
-	movl $0x17,%eax
+	movl $0x17,%eax						# fs指向局部数据段(出错程序的数据段)
 	mov %ax,%fs
+
+; 清CR0中任务已交换标志TS,并取CR0值。若其中协处理器仿真标志E没有置位，说明不是EM
+; 引起的中断，则灰复任务协处理器状态，执行C函数math state restore(),并在返回时去执行
+; ret_from_sys_call 处的代码.
 	pushl $ret_from_sys_call
 	clts				# clear TS so that we can use math
 	movl %cr0,%eax
 	testl $0x4,%eax			# EM (math emulation bit)
-	je _math_state_restore
+	je _math_state_restore  # 执行c函数kernel/sched.c
+# 若EM标志位置位,则去执行数学仿真程序match_emulate
 	pushl %ebp
 	pushl %esi
 	pushl %edi
-	call _math_emulate
+	call _math_emulate      # math_emulate.c
 	popl %edi
 	popl %esi
 	popl %ebp
-	ret
+	ret                     # 这里ret将回到 ret_from_sys_call
 
+; int32-(int0x20)时钟中断处理程序。中断频率被设置为100Hz(include/1inux/sched.h,5),
+; 定时芯片8253/8254是在(kernel/sched.c,406)处初始化的。因此这里jiffies每10毫秒加1.
+; 这段代码将jiffies增1，发送结束中断指令给8259控制器，然后用当前特权级作为参数调用
+; C函数do_timer(long CPL)。当调用返回时转去检测并处理信号。
 .align 2
 _timer_interrupt:
 	push %ds		# save ds,es and put kernel data space
@@ -239,43 +277,58 @@ _timer_interrupt:
 	pushl %ecx		# save those across function calls. %ebx
 	pushl %ebx		# is saved as we use that in ret_sys_call
 	pushl %eax
-	movl $0x10,%eax
+	movl $0x10,%eax     # ds es指向内核数据段
 	mov %ax,%ds
 	mov %ax,%es
-	movl $0x17,%eax
+	movl $0x17,%eax		# fs指向局部数据段(出错程序的数据段)
 	mov %ax,%fs
 	incl _jiffies
+; 由于初始化中断控制芯片时没有采用自动EOI,所以这里需要发指令结束该硬件中断。
 	movb $0x20,%al		# EOI to interrupt controller #1
 	outb %al,$0x20
+; 下面从堆栈中取出执行系统调用代码的选择符(CS段寄存器值)中的当前特权级别(0或3)并压)
+; 堆栈，作为do_timer的参数。do_timer函数执行任务切换、计时等工作，在kernel/sched.c,
+; 305行实现。
 	movl CS(%esp),%eax
 	andl $3,%eax		# %eax is CPL (0 or 3, 0=supervisor)
 	pushl %eax
 	call _do_timer		# 'do_timer(long CPL)' does everything from
-	addl $4,%esp		# task switching to accounting ...
+	addl $4,%esp		# task switching to accounting ...   丢弃调用时压入栈的EIP值
 	jmp ret_from_sys_call
 
+; 这是sys_execve()系统调用。取中断调用程序的代码指针作为参数调用C函数do_execve()。
+; do_execve0在(fs/exec.c,182)。
 .align 2
 _sys_execve:
-	lea EIP(%esp),%eax
+	lea EIP(%esp),%eax  # eax指向堆栈中保存用户程序eip指针处
 	pushl %eax
 	call _do_execve
-	addl $4,%esp
+	addl $4,%esp        # pop参数
 	ret
 
+; sys_fork调用，用于创建子进程，是system_call功能2。原形在include/1inux/sys.h中。
+; 首先调用C函数find_empty_process,取得一个进程号pid。若返回负数则说明目前任务数组
+; 己满。然后调用copy_process复制进程。
 .align 2
 _sys_fork:
 	call _find_empty_process
-	testl %eax,%eax
-	js 1f
+	testl %eax,%eax                 # 在eax中返回进程号pid,若返回负数则推出
+	js 1f                           # 负号跳转
 	push %gs
 	pushl %esi
 	pushl %edi
 	pushl %ebp
 	pushl %eax
 	call _copy_process
-	addl $20,%esp
+	addl $20,%esp                   # 丢弃所有压栈内容
 1:	ret
 
+; int46--(int0x2E)硬盘中断处理程序，响应硬件中断请求IRQ14。
+; 当请求的硬盘操作完成或出错就会发出此中断信号。（参见kernel/blk_drv/hd.c)。
+; 首先向8259A中断控制从芯片发送结束硬件中断指令(EOI),然后取变量do_hd中的函数指针放入edx
+; 寄存器中，并置do_hd为NULL,接着判断edx函数指针是否为空。如果为空，则给edx赋值指向
+; unexpected_hd_interrupt(),用于显示出错信总。随后向8259A主芯片送EOI指令，并调用edx中
+; 指针指向的函数：read_intr()、write_intr()或unexpected_hd_interrupt()
 _hd_interrupt:
 	pushl %eax
 	pushl %ecx
@@ -285,20 +338,24 @@ _hd_interrupt:
 	push %fs
 	movl $0x10,%eax
 	mov %ax,%ds
-	mov %ax,%es
+	mov %ax,%es					# ds es指向内核数据段
 	movl $0x17,%eax
-	mov %ax,%fs
+	mov %ax,%fs					# fs指向局部数据段(出错程序的数据段)
+; 由于初始化中断控制芯片时没有采用自动EOI,所以这里需要发指令结束该硬件中断。
 	movb $0x20,%al
-	outb %al,$0xA0		# EOI to interrupt controller #1
-	jmp 1f			# give port chance to breathe
+	outb %al,$0xA0		# EOI to interrupt controller #1 #  送入8259A
+	jmp 1f			# give port chance to breathe		 #  延时
 1:	jmp 1f
+; dohd定义为一个函数指针，将被威值read intr()或write intr()函数地址。放到edx寄存器后
+; 就将do_hd指针变量置为ULL。然后测试得到的函数指针，若该指针为空，则赋予该指针指向C
+; 函数unexpected_hd_interrupt(),以处理未知硬盘中断。
 1:	xorl %edx,%edx
 	xchgl _do_hd,%edx
-	testl %edx,%edx
-	jne 1f
+	testl %edx,%edx			# 测试是否为NULL
+	jne 1f					# 若空则指向_unexpected_hd_interrupt
 	movl $_unexpected_hd_interrupt,%edx
-1:	outb %al,$0x20
-	call *%edx		# "interesting" way of handling intr.
+1:	outb %al,$0x20			# 送入8259A中断控制器EOI(结束硬件中断)
+	call *%edx		# "interesting" way of handling intr. 调用do_hd指向的C函数
 	pop %fs
 	pop %es
 	pop %ds
@@ -307,6 +364,12 @@ _hd_interrupt:
 	popl %eax
 	iret
 
+; int38-(int0x26)软盘驱动器中断处理程序，响应硬件中断请求IRQ6。
+; 其处理过程与上面对硬盘的处理基本一样。(kernel/b1kdrv/floppy.c)。
+; 首先向8259A中断控制器主芯片发送EOI指令，然后取变量do_floppy中的函数指针放入eax
+; 寄存器中，并置do_floppy为NULL,接着判断eax函数指针是否为空。如为空，则给eax赋值指向
+; unexpected_floppy_interrupt O,用于显示出错信息。随后调用eax指向的函数：rw_interrupt,
+; seek_interrupt,recal_interrupt,reset_interrupt unexpected_floppy_interrupt.
 _floppy_interrupt:
 	pushl %eax
 	pushl %ecx
@@ -322,8 +385,11 @@ _floppy_interrupt:
 	movb $0x20,%al
 	outb %al,$0x20		# EOI to interrupt controller #1
 	xorl %eax,%eax
+; do_floppy为一函数指针，将被赋值实际处理C函数指针。该指针在被交换放到eax寄存器后就将
+; do_floppy变量置空。然后测试eax中原指针是否为空，若是则使指针指向C函数
+; unexpected_floppy_interrupt
 	xchgl _do_floppy,%eax
-	testl %eax,%eax
+	; testl %eax,%eax        #测试函数指针是否=NULL若空，则使指针指向C函数unexpected_floppy_interrupt
 	jne 1f
 	movl $_unexpected_floppy_interrupt,%eax
 1:	call *%eax		# "interesting" way of handling intr.
@@ -335,6 +401,8 @@ _floppy_interrupt:
 	popl %eax
 	iret
 
+; int39-(int0x27)并行口中断处理程序，对应硬件中断请求信号IRQ7。
+; 本版本内核还未实现。这里只是发送E0I指令。
 _parallel_interrupt:
 	pushl %eax
 	movb $0x20,%al
