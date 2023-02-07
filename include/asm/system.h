@@ -13,8 +13,8 @@ __asm__ ("movl %%esp,%%eax\n\t" \
 	"movw %%ax,%%gs" \
 	:::"ax")
 
-#define sti() __asm__ ("sti"::)
-#define cli() __asm__ ("cli"::)
+#define sti() __asm__ ("sti"::)    
+#define cli() __asm__ ("cli"::)   //禁止中断发生
 #define nop() __asm__ ("nop"::)
 
 #define iret() __asm__ ("iret"::)

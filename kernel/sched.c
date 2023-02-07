@@ -289,10 +289,11 @@ void wake_up(struct task_struct **p)
 }
 
 /*
- * OK, here are some floppy things that shouldn't be in the kernel
- * proper. They are here because the floppy needs a timer, and this
- * was the easiest way of doing it.
+好了，从这里开始是一些有关软盘的子程序，本不应该放在内核的主要部分
+中的。将它们放在这里是因为软驱需要定时处理，而放在这里是最方便的。
  */
+
+
 static struct task_struct * wait_motor[4] = {NULL,NULL,NULL,NULL};
 static int  mon_timer[4]={0,0,0,0};
 static int moff_timer[4]={0,0,0,0};
@@ -356,33 +357,49 @@ void do_floppy_timer(void)
 	}
 }
 
+
+//下面是关于定时器的代码。最多可有64个定时器。
 #define TIME_REQUESTS 64
 
 static struct timer_list {
-	long jiffies;
-	void (*fn)();
-	struct timer_list * next;
-} timer_list[TIME_REQUESTS], * next_timer = NULL;
+	long jiffies;									//定时器滴答数
+	void (*fn)();									//定时处理程序
+	struct timer_list * next;						//链接指向下一个定时器
+} timer_list[TIME_REQUESTS], * next_timer = NULL;	//next_timer是定时器队列头指针
 
+// 添加定时器,输入参数为指定的定时器(ticks)和相应的处理程序函数
+// floop.c利用该函数执行启动或关闭马达的延时操作
+// jiffies 以10ms计的tick, fn 定时器任务
 void add_timer(long jiffies, void (*fn)(void))
 {
 	struct timer_list * p;
 
+	//定时器传入函数空，返回
 	if (!fn)
 		return;
 	cli();
+
+	//定时值<=0,立刻执行
 	if (jiffies <= 0)
 		(fn)();
 	else {
+		//找到一个空闲的定时器
 		for (p = timer_list ; p < timer_list + TIME_REQUESTS ; p++)
 			if (!p->fn)
 				break;
+		//如果满了,崩溃
 		if (p >= timer_list + TIME_REQUESTS)
 			panic("No more time requests free");
+		//填入定时器,更新定时器队列头指针
 		p->fn = fn;
 		p->jiffies = jiffies;
 		p->next = next_timer;
 		next_timer = p;
+		// 链表项按定时值从小到大排序。在排序时减去排在前面需要的滴答数，这样在处理定时器时
+		// 只要查看链表头的第一项的定时是否到期即可。[？这段程序好象没有考虑周全。如果新
+		// 插入的定时器值小于原来头一个定时器值时则根本不会进入循环中，但此时还是应该将紧随
+		// 其后面的一个定时器值减去新的第1个的定时值。即如果第1个定时值=第2个，则第2个
+		// 定时值扣除第1个的值即可，否则进入下面循环中进行处理。]    jiffies记录的是前后timer的间隔值?
 		while (p->next && p->next->jiffies < p->jiffies) {
 			p->jiffies -= p->next->jiffies;
 			fn = p->fn;
@@ -394,42 +411,62 @@ void add_timer(long jiffies, void (*fn)(void))
 			p = p->next;
 		}
 	}
-	sti();
+	sti();//恢复中断
 }
 
+// 时钟中断C函数处理程序，在system_call.s中的_timer_interrupt(176行)被调用.
+// 参数cp1是当前特权级0或3，是时钟中断发生时正被执行的代码选择符中的特权级。
+// cp1=0时表示中断发生时正在执行内核代码：cp1=3时表示中断发生时正在执行用户代码。
+// 对于一个进程由于执行时间片用完时，则进行任务切换。并执行一个计时更新工作。
 void do_timer(long cpl)
 {
-	extern int beepcount;
-	extern void sysbeepstop(void);
+	extern int beepcount;			//扬声器发声时间(ticks) chr_dev/console.c
+	extern void sysbeepstop(void);	//关闭扬声器	chr_dev/console.c
 
+	// 如果发声计数次数到，则关闭发声.(向0x61口发送命令，复位位0和1。位0控制8253
+	// 计数器2的工作，位1控制扬声器).
 	if (beepcount)
 		if (!--beepcount)
 			sysbeepstop();
 
+	//如果当前特权级cpl==0,内核程序工作，内核运行时间++,否则用户时间++
+	//[Linus把内核程序统称为超级用户(supervisor)的程序，见system_call.s,293]
 	if (cpl)
 		current->utime++;
 	else
 		current->stime++;
 
+	//有定时任务
 	if (next_timer) {
 		next_timer->jiffies--;
 		while (next_timer && next_timer->jiffies <= 0) {
-			void (*fn)(void);
+			void (*fn)(void);  //函数指针定义
 			
-			fn = next_timer->fn;
+			fn = next_timer->fn;	 //清理定时器
 			next_timer->fn = NULL;
 			next_timer = next_timer->next;
-			(fn)();
+			(fn)();	//执行回调
 		}
 	}
+
+	// 如果当前软盘控制器FDC的数字输出寄存器中马达启动位有置位的，则执行软盘定时程序
 	if (current_DOR & 0xf0)
 		do_floppy_timer();
+	
+	// 时间片还够,返回。时间片用完，且时钟中断正在内核代码中运行则返回，否则执行调度函数
 	if ((--current->counter)>0) return;
 	current->counter=0;
-	if (!cpl) return;
+	if (!cpl) return;	//内核态程序不依赖counter值进行调度
 	schedule();
 }
 
+// 系统调用功能一设置报警定时时间值（秒）。
+// 如果参数seconds大于0，则设置新定时值，并返回原定时时刻还剧余的间隔时间。否则返回0。
+// 进程数据结构中报警定时值alarm的单位是系统滴答(1滴答为10毫秒)，它是系统开机起到
+// 设置定时操作时系统滴答值jiffies和转换成滴答单位的定时值之和，即'jffies+HZ*定时
+// 秒值'。而参数给出的是以秒为单位的定时值，因此本函数的主要操作是进行两种单位的转换。
+// 其中常数HZ=l00,是内核系统运行频率。定义在include/sched.h第5行上。
+// 参数seconds是新的定时时间值，单位是秒。
 int sys_alarm(long seconds)
 {
 	int old = current->alarm;
@@ -440,36 +477,44 @@ int sys_alarm(long seconds)
 	return (old);
 }
 
+// 取进程号
 int sys_getpid(void)
 {
 	return current->pid;
 }
 
+// 取父进程号
 int sys_getppid(void)
 {
 	return current->father;
 }
 
+// 取用户uid
 int sys_getuid(void)
 {
 	return current->uid;
 }
 
+// 取有效用户euid
 int sys_geteuid(void)
 {
 	return current->euid;
 }
 
+// 组号
 int sys_getgid(void)
 {
 	return current->gid;
 }
 
+// 有效组号
 int sys_getegid(void)
 {
 	return current->egid;
 }
 
+// 系统调用功能 -- 降低对CPU的使用优先权（有人会用吗？©）。
+// 应该限制increment为大于0的值，否则可使优先权增大！！
 int sys_nice(long increment)
 {
 	if (current->priority-increment>0)
@@ -477,30 +522,59 @@ int sys_nice(long increment)
 	return 0;
 }
 
+// 内核调度程序的初始化子程序
 void sched_init(void)
 {
 	int i;
 	struct desc_struct * p;
 
+	//Liux系统开发之初，内核不成熟。内核代码会被经常修改。Lius怕自己无意中修改了这些
+	// 关键性的数据结构，造成与POSIX标准的不兼容。这里加入下面这个判断语句并无必要，纯粹
+	// 是为了提醒自己以及其他修改内核代码的人。
 	if (sizeof(struct sigaction) != 16)
 		panic("Struct sigaction MUST be 16 bytes");
+
+	// 在全局描述符表中设置初始任务（任务0）的任务状态段描述符和局部数据表描述符。
+	// FIRST_TSS_ENTRY和FIRST_LDT_ENTRY的值分别是4和5，定义在include/1inux/sched.h
+	// 	中：gdt是一个描述符表数组(include/linux/head.h),实际上对应程序head.s中
+	// 第382行上的全局描述符表基址(_gdt)。因此gdt+FIRST_TSS_ENTRY即为
+	// gdt[FIRST_TSS_ENTRY](即为gdt[4]),也即gdt数组第4项的地址。参见
+	// include/asm/system.h,第65行开始。
 	set_tss_desc(gdt+FIRST_TSS_ENTRY,&(init_task.task.tss));
 	set_ldt_desc(gdt+FIRST_LDT_ENTRY,&(init_task.task.ldt));
-	p = gdt+2+FIRST_TSS_ENTRY;
+
+	// 清任务数组和描述符表项（注意=1开始，所以初始任务的描述符还在）。描述符项结构定义
+	// 在文件include/1inux/head.h中。
+	p = gdt+2+FIRST_TSS_ENTRY;//tss1
 	for(i=1;i<NR_TASKS;i++) {
 		task[i] = NULL;
 		p->a=p->b=0;
-		p++;
+		p++;				  //ldt1
 		p->a=p->b=0;
 		p++;
 	}
 /* Clear NT, so that we won't have troubles with that later on */
+	// 清除标志寄存器中的位NT,这样以后就不会有麻烦*
+	// NT标志用于控制程序的递归调用(Nested Task)。当NT置位时，那么当前中断任务执行
+	// iret指令时就会引起任务切换。NT指出TSS中的back_link字段是否有效。
+	// asm_(pushfl:andl SOxffffbfff,(%esp),popfl)://复位NT标志。
+	// 将任务0的TSS段选择符加载到任务寄存器tr。将局部描述符表段选择符加载到局部描述
+	// 符表寄存器ldtr中。注意！！是将GDT中相应LDT描述符的选择符加载到ldtr。只明确加
+	// 这一次，以后新任务LDT的加截，是CPU根据TSS中的LDT项自动加载。
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");
-	ltr(0);
+	ltr(0);//宏 ltr 第0个任务
 	lldt(0);
+
+	// 下面代码用于初始化8253定时器。通道0，选择工作方式3，二进制计数方式。通道0的
+	// 输出引脚接在中断控制主芯片的IRQ0上，它每10毫秒发出一个IRQ0请求。LATCH是初始
+	// 定时计数值。
 	outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
 	outb_p(LATCH & 0xff , 0x40);	/* LSB */
 	outb(LATCH >> 8 , 0x40);	/* MSB */
+	
+	// 设置时钟中断处理程序句柄（设置时钟中断门）。修改中断控制器屏蔽码，允许时钟中断.
+	// 然后设置系统调用中断门。这两个设置中断描述符表IDT中描述符的宏定义在文件
+	// include/asm/system.h中第33、39行处。两者的区别参见system.h文件开始处的说明.
 	set_intr_gate(0x20,&timer_interrupt);
 	outb(inb_p(0x21)&~0x01,0x21);
 	set_system_gate(0x80,&system_call);
