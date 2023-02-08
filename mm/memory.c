@@ -260,16 +260,30 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 	if (CODE_SPACE(address))
 		do_exit(SIGSEGV);
 #endif
+	// 调用上面函数un_wp_page()来处理取消页面保护。但首先需要为其准备好参数。参数是
+	// 线性地址address指定页面在页表中的页表项指针，其计算方法是：
+	// (address>l0)&0xffc: 计算指定线性地址中页表项在页表中的偏移地址：因为
+	// 根据线性地址结构，(address>12)就是页表项中的索引，但每项占4个字节，因此乘
+	// 4后：(address>12)<2=(address>>l0) & 0xffc就可得到页表项在表中的偏移地址，
+	// 与操作&0xffc用于限制地址范围在一个页面内。又因为只移动了10位，因此最后2位
+	// 是线性地址低12位中的最高2位，也应屏被掉。
+	// 因此求线性地址中页表项在页表中偏移地址直观一些的表示方法是(((address>>12)&0x3ff)<2).
+	// address>>12 = 线性地址高20位(目录项索引31-22 : 页表项中的索引21-12) 
+	// & 0x3ff(取21-12位) = 页表项中的索引
+	// <2 即*4 获得页表项在表中的偏移地址
 	un_wp_page((unsigned long *)
 		(((address>>10) & 0xffc) + (0xfffff000 &
 		*((unsigned long *) ((address>>20) &0xffc)))));
 
 }
 
+// 写页面验证
+// 若页面不可写，则复制页面,在fork.c中第34行被内存验证通用函数verify_area调用.
+// 参数address是指定页面的线性地址
 void write_verify(unsigned long address)
 {
 	unsigned long page;
-
+	//
 	if (!( (page = *((unsigned long *) ((address>>20) & 0xffc)) )&1))
 		return;
 	page &= 0xfffff000;
