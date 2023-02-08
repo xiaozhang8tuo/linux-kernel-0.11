@@ -293,26 +293,48 @@ void wake_up(struct task_struct **p)
 中的。将它们放在这里是因为软驱需要定时处理，而放在这里是最方便的。
  */
 
+// 下面第301-362行代码用于处理软驱定时。在阅读这段代码之前请先看一下块设备一章
+// 中有关软盘驱动程序(f1oppy.c)后面的说明，或者到阅读软盘块设备驱动程序时在来
+// 看这段代码。其中时间单位：1个滴答=1/100秒.
 
+// 下面数组存放等待软驱马达启动到正常转速的进程指针。数组索引0-3分别对应软驱A-D。
 static struct task_struct * wait_motor[4] = {NULL,NULL,NULL,NULL};
+// 下面数组分别存放各软驱马达启动所需要的滴答数。程序中默认启动时间为50个滴答(0.5秒)。
 static int  mon_timer[4]={0,0,0,0};
+// 下面数组分别存放各软驱在马达停转之前需维持的时间。程序中设定为10000个滴答(100秒)。
 static int moff_timer[4]={0,0,0,0};
+// 对应软驱控制器中当前数字输出寄存器。该寄存器每位的定义如下：
+// 位7-4：分别控制驱动器D-A马达的启动。1-启动：0-关闭。
+// 位3：1-允许DMA和中断请求：0一禁止DMA和中断请求。
+// 位2：1-启动软盘控制器：0-复位软盘控制器。
+// 位1-0：00-11，用于选择控制的软驱A-D。
 unsigned char current_DOR = 0x0C;
 
+// 指定软驱启动到正常运转状态所需等待时间。
+// 参数r-软驱号(0--3)，返回值为滴答数。
+// 局部变量selected是选中软驱标志(blk_drv/floppy.c,122)。mask是所选软驱对应的
+// 数字输出寄存器中启动马达比特位。mask高4位是各软驱启动马达标志。
 int ticks_to_floppy_on(unsigned int nr)
 {
 	extern unsigned char selected;
 	unsigned char mask = 0x10 << nr;
 
+	// 系统最多有4个软驱。首先预先设置好指定软驱r停转之前需要经过的时间(100秒)。然后
+	// 取当前D0R寄存器值到临时变量mask中，并把指定软驱的马达启动标志置位。
 	if (nr>3)
 		panic("floppy_on: nr>3");
-	moff_timer[nr]=10000;		/* 100 s = very big :-) */
-	cli();				/* use floppy_off to turn it off */
+	moff_timer[nr]=10000;		/* 100 s = very big :-) 停转维持时间 */ 
+	cli();				/* use floppy_off to turn it off 关中断 */
 	mask |= current_DOR;
+	// 如果当前没有选择软驱，则首先复位其他软驱的选择位，然后置指定软驱选择位。
 	if (!selected) {
 		mask &= 0xFC;
 		mask |= nr;
 	}
+	// 	如果数字输出寄存器的当前值与要求的值不同，则向FDC数字输出端口输出新值(mask),并日
+	// 如果要求启动的马达还没有启动，则置相应软驱的马达启动定时器值(HZ/2=0.5秒或50个
+	// 滴答)。若已经启动，则再设置启动定时为2个滴答，能满足下面do_f1oppy_timer(O中先递
+	// 减后判断的要求。执行本次定时代码的要求即可。此后更新当前数字输出寄存器current_DOR
 	if (mask != current_DOR) {
 		outb(mask,FD_DOR);
 		if ((mask ^ current_DOR) & 0xf0)
@@ -321,39 +343,47 @@ int ticks_to_floppy_on(unsigned int nr)
 			mon_timer[nr] = 2;
 		current_DOR = mask;
 	}
-	sti();
-	return mon_timer[nr];
+	sti();//开中断
+	return mon_timer[nr];//返回启动马达需要的时间
 }
 
+// 等待指定软驱马达启动所需的一段时间，然后返回。
+// 设置指定软驱的马达启动到正常转速所需的延时，然后睡眠等待。在定时中断过程中会一直
+// 递成判断这里设定的延时值。当延时到期，就会唤醒这里的等待进程。
 void floppy_on(unsigned int nr)
 {
 	cli();
+	// 如果马达启动定时还没到，就一直把当前进程置为不可中断睡眠状态并放入等待马达运行的队列中
 	while (ticks_to_floppy_on(nr))
 		sleep_on(nr+wait_motor);
-	sti();
+	sti();// 开中断
 }
 
+// 置关闭相应软驱马达停转定时器(3秒)。
+// 若不使用该函数明确关闭指定的软驱马达，则在马达开启100秒之后也会被关闭。
 void floppy_off(unsigned int nr)
 {
 	moff_timer[nr]=3*HZ;
 }
-
+// 软盘定时处理子程序。更新马达启动定时值和马达关闭停转计时值。该子程序会在时钟定时
+// 中断过程中被调用，因此系统每经过一个滴答(10ms)就会被调用一次，随时更新马达开启或
+// 停转定时器的值。如果某一个马达停转定时到，则将数字输出寄存器马达启动位复位。
 void do_floppy_timer(void)
 {
 	int i;
 	unsigned char mask = 0x10;
 
 	for (i=0 ; i<4 ; i++,mask <<= 1) {
-		if (!(mask & current_DOR))
+		if (!(mask & current_DOR))			// 如果不是DOR指定的马达则跳过
 			continue;
-		if (mon_timer[i]) {
+		if (mon_timer[i]) {					// 如果马达启动定时则唤醒进程
 			if (!--mon_timer[i])
 				wake_up(i+wait_motor);
-		} else if (!moff_timer[i]) {
+		} else if (!moff_timer[i]) {		// 如果马达停转定时到就复位相应马达启动位，且更新数字输出寄存器
 			current_DOR &= ~mask;
 			outb(current_DOR,FD_DOR);
 		} else
-			moff_timer[i]--;
+			moff_timer[i]--;				// 否则马达停转计时递减
 	}
 }
 
