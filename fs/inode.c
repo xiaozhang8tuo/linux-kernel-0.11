@@ -146,7 +146,11 @@ int create_block(struct m_inode * inode, int block)
 {
 	return _bmap(inode,block,1);
 }
-		
+
+// 放回(放置)一个i节点(回写入设备)。
+// 该函数主要用于把i节点引用计数值递减1，并且若是管道i节点，则唤醒等待的进程。
+// 若是块设备文件i节点则刷新设备。并且若i节点的链接计数为0，则释放该i节点占用
+// 的所有磁盘逻辑块，并释放该i节点。
 void iput(struct m_inode * inode)
 {
 	if (!inode)

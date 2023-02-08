@@ -293,20 +293,29 @@ __asm__("movw %%dx,%0\n\t" \
 #define set_base(ldt,base) _set_base( ((char *)&(ldt)) , base )
 #define set_limit(ldt,limit) _set_limit( ((char *)&(ldt)) , (limit-1)>>12 )
 
+
+// 从地址addr处描述符中取段基地址。功能与set_base()正好相反。
+// edx-存放基地址(_base); %l-地址addr偏移2  %2-地址addr偏移4  %3-addr偏移7。
 #define _get_base(addr) ({\
 unsigned long __base; \
-__asm__("movb %3,%%dh\n\t" \
-	"movb %2,%%dl\n\t" \
-	"shll $16,%%edx\n\t" \
-	"movw %1,%%dx" \
-	:"=d" (__base) \
+__asm__("movb %3,%%dh\n\t" \			// 取[addr+7]处基址高16位的高8位(31-24) ->dh
+	"movb %2,%%dl\n\t" \				// 取[addr+4]处基址高16位的低8位(23-16) ->dl
+	"shll $16,%%edx\n\t" \				// 基地址高16位移到edx中高16位处(左移16位)
+	"movw %1,%%dx" \					// 取[addr+2]处基地址低16位(15-0)		->dx
+	:"=d" (__base) \					// 返回
 	:"m" (*((addr)+2)), \
 	 "m" (*((addr)+4)), \
 	 "m" (*((addr)+7))); \
 __base;})
 
+// 传入ldt[x], 返回所指段描述符中的基地址
 #define get_base(ldt) _get_base( ((char *)&(ldt)) )
 
+
+// 取段选择符segment指定的描述符中的段限长值
+// 指令lsl是Load Segment Limit缩写。它从指定段描述符中取出分散的限长比特位拼成完整的
+// 段限长值放入指定寄存器中。所得的段限长是实际字节数减1，因此这里还需要加1后才返回。
+// %0-存放段长值（字节数）：%1-段选择符segment
 #define get_limit(segment) ({ \
 unsigned long __limit; \
 __asm__("lsll %1,%0\n\tincl %0":"=r" (__limit):"r" (segment)); \

@@ -487,7 +487,7 @@ void do_timer(long cpl)
 		do_floppy_timer();
 	
 	// 时间片还够,返回。时间片用完，且时钟中断正在内核代码中运行则返回，否则执行调度函数
-	if ((--current->counter)>0) return;
+	if ((--current->counter)>0) return; //时间片在此消耗,时钟中断中
 	current->counter=0;
 	if (!cpl) return;	//内核态程序不依赖counter值进行调度
 	schedule();

@@ -83,14 +83,22 @@ return __res;
 }
 
 /*
- * Free a page of memory at physical address 'addr'. Used by
- * 'free_page_tables()'
+ * 释放物理地址'addr'处的一页内存。用于函数free_page_tables
+ * 
  */
+// 释放物理地址addr开始的1页面内存
+// 物理地址1MB以下的内存空间用于内核程序和缓冲，不作为分配页面的内存空间。因此参数addr需要大于1MB
 void free_page(unsigned long addr)
 {
 	if (addr < LOW_MEM) return;
 	if (addr >= HIGH_MEMORY)
 		panic("trying to free nonexistent page");
+	
+	// 如果对参数addr验证通过，那么就根据这个物理地址换算出从内存低端开始计起的内存
+	// 页面号。页面号=(addr-LOW_MEM)/4096。可见页面号从0号开始计起。此时addr
+	// 中存放着页面号。如果该页面号对应的页面映射字节不等于0，则减1返回。此时该映射
+	// 字节值应该为0，表示页面已释放。如果对应页面字节原本就是0，表示该物理页面本来
+	// 就是空闲的，说明内核代码出问题。于是显示出错信息并停机。
 	addr -= LOW_MEM;
 	addr >>= 12;
 	if (mem_map[addr]--) return;
