@@ -46,7 +46,7 @@ void verify_area(void * addr,int size)
 	// 因此在50行上也需要把验证开始位置start调整成页面边界值。参见前面的图 "内存验
 	// 证范围的调整"。
 	//	|-----------------------------------------------|
-	//			           start ------|
+	//			           start       |
 	//  |<--  start&0xfff  --><--size-->
 	//  |start&0xfffff000
 	//  |<--          size           -->
@@ -56,7 +56,7 @@ void verify_area(void * addr,int size)
 	// 下面把start加上进程数据段在线性地址空间中的起始基址，变成系统整个线性空间中的地
 	// 址位置。对于Liux0.11内核，其数据段和代码段在线性地址空间中的基址和限长均相同。
 	// 然后循环进行写页面验证。若页面不可写，则复制页面。(mm/memory.c,261行)
-	start += get_base(current->ldt[2]);
+	start += get_base(current->ldt[2]);  //基地址+偏移量=线性地址
 	while (size>0) {
 		size -= 4096;
 		write_verify(start);
@@ -64,11 +64,22 @@ void verify_area(void * addr,int size)
 	}
 }
 
+// 复制内存页表。
+// 参数nr是新任务号：p是新任务数据结构指针。该函数为新任务在线性地址空间中设置代码
+// 段和数据段基址、限长，并复制页表。由于Linux系统采用了写时复制(copy on write)
+// 技术，因此这里仅为新进程设置自己的页目录表项和页表项，而没有实际为新进程分配物理
+// 内存页面。此时新进程与其父进程共享所有内存页面。操作成功返回0，否则返回出错号。
 int copy_mem(int nr,struct task_struct * p)
 {
 	unsigned long old_data_base,new_data_base,data_limit;
 	unsigned long old_code_base,new_code_base,code_limit;
 
+
+	// 首先取当前进程局部描述符表中代码段描述符和数据段描述符项中的段限长（字节数）。
+	// 0x0F是代码段选择符：0x17是数据段选择符。然后取当前进程代码段和数据段在线性地址
+	// 空间中的基地址。由于Liux0.11内核还不支持代码和数据段分立的情况，因此这里需要
+	// 检查代码段和数据段基址和限长是否都分别相同。否则内核显示出错信息，并停止运行。
+	// get_limit 和 get_base 定义在include/1inux/sched.h
 	code_limit=get_limit(0x0f);
 	data_limit=get_limit(0x17);
 	old_code_base = get_base(current->ldt[1]);
@@ -77,7 +88,12 @@ int copy_mem(int nr,struct task_struct * p)
 		panic("We don't support separate I&D");
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
-	new_data_base = new_code_base = nr * 0x4000000;
+	
+	// 然后设置创建中的新进程在线性地址空间中的基地址等于(64MB*其任务号)，并用该值
+	// 设置新进程局部描述符表中段描述符中的基地址。接着设置新进程的页目录表项和页表项，
+	// 即复制当前进程（父进程）的页目录表项和页表项。此时子进程共享父进程的内存页面。
+	// 正常情况下copy_page_tables返回0，否则表示出错，则释放刚申请的页表项。
+	new_data_base = new_code_base = nr * 0x4000000;//64MB * nr 为线性空间的基地址
 	p->start_code = new_code_base;
 	set_base(p->ldt[1],new_code_base);
 	set_base(p->ldt[2],new_data_base);
