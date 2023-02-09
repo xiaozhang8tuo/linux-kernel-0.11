@@ -98,6 +98,7 @@ int copy_mem(int nr,struct task_struct * p)
 	set_base(p->ldt[1],new_code_base);
 	set_base(p->ldt[2],new_data_base);
 	if (copy_page_tables(old_data_base,new_data_base,data_limit)) {
+		//复制页表失败要free
 		free_page_tables(new_data_base,data_limit);
 		return -ENOMEM;
 	}
@@ -105,9 +106,8 @@ int copy_mem(int nr,struct task_struct * p)
 }
 
 /*
- *  Ok, this is the main fork-routine. It copies the system process
- * information (task[nr]) and sets up the necessary registers. It
- * also copies the data segment in it's entirety.
+	下面是主要的fork子程序。它复制系统进程信息(task[n])
+并且设置必要的寄存器。还整个的复制制数据段
  */
 int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		long ebx,long ecx,long edx,

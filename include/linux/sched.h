@@ -1,7 +1,7 @@
 #ifndef _SCHED_H
 #define _SCHED_H
 
-#define NR_TASKS 64
+#define NR_TASKS 64		//系统最多同时任务数(进程数)
 #define HZ 100
 
 #define FIRST_TASK task[0]
