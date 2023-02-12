@@ -206,7 +206,7 @@ extern void wake_up(struct task_struct ** p);
 // TSS起始位置。该宏得到的值正好也是该TSS的选择符值。---- 错误的描述
 
 // 计算(16位)段选择符，注意不是相对GDT的偏移地址 FIRST_TSS_ENTRY<<3 左移3位是TI和RPL设置0, 之后根据n转化成GDT中的索引号  段选择符:去LDT/GDT的index项中拿段描述符
-// 4: 0x0100 --> 0x0100 000   6: 0x0100 000 + 0x10 000 ---> 0x0110 000 
+// 4: 0x0100 --> 0x0100 000   6: 0x1 0000 + 0x0100 000   ---> 0x0110 000 
 #define _TSS(n) (  (((unsigned long) n)<<4)  +  (FIRST_TSS_ENTRY<<3)  )
 
 // 计算在全局表中第n个任务的LDT段描述符的选择符值(偏移量)

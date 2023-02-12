@@ -109,6 +109,15 @@ int copy_mem(int nr,struct task_struct * p)
 	下面是主要的fork子程序。它复制系统进程信息(task[n])
 并且设置必要的寄存器。还整个的复制制数据段
  */
+// 复制进程。
+// 该函数的参数是进入系统调用中断处理过程system_call.s开始，直到调用本系统调用处理
+// 过程system call.s第322行和调用本函数前时system call.s第317行逐步压入栈的
+// 各寄存器的值。这些在system_call.s程序中逐步压入栈的值（参数）包括：
+// CPU执行中断指令压入的用户栈地址ss和esp、标志寄存器eflags和返回地址cs和eip:
+// 在刚进入system_cal1时压入栈的段寄存器ds、es、fs和edx、ecx、ebx;
+// 调用sys_call_table中sys_fork函数时压入栈的返回地址（用参数none表示）；
+// 在调用copy_process()之前压入栈的gs、esi、edi、ebp和eax(nr)值。
+// 其中参数nr是调用find_empty_process分配的任务数组项号。
 int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		long ebx,long ecx,long edx,
 		long fs,long es,long ds,
@@ -118,27 +127,43 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	int i;
 	struct file *f;
 
+	// 首先为新任务数据结构分配内存。如果内存分配出错，则返回出错码并退出。然后将新任务
+	// 结构指针放入任务数组的nr项中。其中nr为任务号，由前面find_empty_process返回。
+	// 接着把当前进程任务结构内容复制到刚申请到的内存页面p开始处。
 	p = (struct task_struct *) get_free_page();
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
-	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
-	p->state = TASK_UNINTERRUPTIBLE;
-	p->pid = last_pid;
-	p->father = current->pid;
-	p->counter = p->priority;
-	p->signal = 0;
-	p->alarm = 0;
-	p->leader = 0;		/* process leadership doesn't inherit */
-	p->utime = p->stime = 0;
-	p->cutime = p->cstime = 0;
-	p->start_time = jiffies;
-	p->tss.back_link = 0;
-	p->tss.esp0 = PAGE_SIZE + (long) p;
-	p->tss.ss0 = 0x10;
-	p->tss.eip = eip;
-	p->tss.eflags = eflags;
-	p->tss.eax = 0;
+	*p = *current;	/* NOTE! this doesn't copy the supervisor stack  注意！这样做不会复削超级用户堆栈（只复制进程结构）*/
+
+	// 随后对复制来的进程结构内容进行一些修改，作为新进程的任务结构。先将新进程的状态
+	// 置为不可中断等待状态，以防止内核调度其执行。然后设置新进程的进程号pid和父进程
+	// 号father,并初始化进程运行时间片值等于其priority值(一般为15个嘀嗒)。接着
+	// 复位新进程的信号位图、报警定时值、会话(session)领导标志leader、进程及其子
+	// 进程在内核和用户态运行时间统计值，还设置进程开始运行的系统时间start_time。
+	p->state = TASK_UNINTERRUPTIBLE;		// 不可中断等待状态
+	p->pid = last_pid;						// 新进程号,由find_empty_process得到
+	p->father = current->pid;				// 设置父进程号
+	p->counter = p->priority;				// 运行时间片值
+	p->signal = 0;							// 信号位置0
+	p->alarm = 0;							// 报警定时器清零
+	p->leader = 0;		/* process leadership doesn't inherit 进程的领导权不继承*/
+	p->utime = p->stime = 0;				// 用户态和内核态运行时间
+	p->cutime = p->cstime = 0;				// 子进程用户态和内核态运行时间
+	p->start_time = jiffies;				// 进程开始运行时间(当前时间滴答数)
+	
+	// 再修改任务状态段TSS数据（参见列表后说明）。由于系统给任务结构p分配了1页新
+	// 内存，所以(PAGE_SIZE+(long)p)让esp0正好指向该页顶端。ss0:esp0用作程序
+	// 在内核态执行时的栈。另外，在第3章中我们已经知道，每个任务在GDT表中都有两个
+	// 段描述符，一个是任务的TSS段描述符，另一个是任务的LDT表段描述符。下面_LDT(nr)
+	// 语句就是把GDT中本任务LDT段描述符的选择符保存在本任务的TSS段中。当CPU执行
+	// 切换任务时，会自动从TSS中把LDT段描述符的选择符加载到ldtr寄存器中。
+	p->tss.back_link = 0;					
+	p->tss.esp0 = PAGE_SIZE + (long) p;		// 内核态栈指针
+	p->tss.ss0 = 0x10;						// 内核态栈的段选择符(与内核数据段一致)
+	p->tss.eip = eip;						// 指令代码指针
+	p->tss.eflags = eflags;					// 标志寄存器
+	p->tss.eax = 0;							// fork返回时新进程返回0的原因
 	p->tss.ecx = ecx;
 	p->tss.edx = edx;
 	p->tss.ebx = ebx;
@@ -146,7 +171,7 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->tss.ebp = ebp;
 	p->tss.esi = esi;
 	p->tss.edi = edi;
-	p->tss.es = es & 0xffff;
+	p->tss.es = es & 0xffff;				// 段寄存器仅16位有效
 	p->tss.cs = cs & 0xffff;
 	p->tss.ss = ss & 0xffff;
 	p->tss.ds = ds & 0xffff;
@@ -176,14 +201,20 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	return last_pid;
 }
 
+// 为新进程取得不重复的进程号last_pid。函数返回在任务数组中的任务号(数组项)。
 int find_empty_process(void)
 {
 	int i;
 
+	// 首先获取新的进程号。如果last_pid增1后超出进程号的正数表示范围，则重新从1开始
+	// 使用pid号。然后在任务数组中搜索刚设置的pid号是否已经被任何任务使用。如果是则
+	// 跳转到函数开始处重新获得一个pid号。
 	repeat:
 		if ((++last_pid)<0) last_pid=1;
 		for(i=0 ; i<NR_TASKS ; i++)
 			if (task[i] && task[i]->pid == last_pid) goto repeat;
+	// 接着在任务数组中为新任务寻找一个空闲项，并返回项号。last_pid是一个全局变量，不用返回。
+	// 如果此时任务数组中64个项已经被全部占用，则返回出错码。
 	for(i=1 ; i<NR_TASKS ; i++)
 		if (!task[i])
 			return i;
