@@ -267,6 +267,12 @@ __asm__("cmpl %%ecx,_current\n\t" \							//任务n是当前任务吗? (current 
 //页面地址对准，获得n所在地址的下一页(向下一个页取整)
 #define PAGE_ALIGN(n) (((n)+0xfff)&0xfffff000)
 
+
+// 设置位于地址addr处描述符中的各基地址字段（基地址是base).
+// %0-地址addr偏移2 
+// %l-地址addr偏移4 
+// %2-地址addr偏移7 
+// edx-基地址base。
 #define _set_base(addr,base) \
 __asm__("movw %%dx,%0\n\t" \
 	"rorl $16,%%edx\n\t" \

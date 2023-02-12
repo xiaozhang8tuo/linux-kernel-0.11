@@ -177,15 +177,31 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->tss.ds = ds & 0xffff;
 	p->tss.fs = fs & 0xffff;
 	p->tss.gs = gs & 0xffff;
-	p->tss.ldt = _LDT(nr);
-	p->tss.trace_bitmap = 0x80000000;
+	p->tss.ldt = _LDT(nr);					// 任务局部表描述符的选择符(LDT描述符在GDT中)
+	p->tss.trace_bitmap = 0x80000000;		// 高16位有效
+
+	// 如果当前任务使用了协处理器，就保存其上下文。汇编指令clts用于清除控制寄存器CRO
+	// 中的任务已交换(TS)标志。每当发生任务切换，CPU都会设置该标志。该标志用于管理
+	// 数学协处理器：如果该标志置位，那么每个ESC指令都会被捕获（异常7）。如果协处理
+	// 器存在标志MP也同时置位的话，那么WAIT指令也会捕获。因此，如果任务切换发生在一
+	// 个ESC指令开始执行之后，则协处理器中的内容就可能需要在执行新的ESC指令之前保存
+	// 起来。捕获处理句柄会保存协处理器的内容并复位TS标志。指令fnsave用于把协处理器
+	// 的所有状态保存到目的操作数指定的内存区域中(tss.1387)·
 	if (last_task_used_math == current)
 		__asm__("clts ; fnsave %0"::"m" (p->tss.i387));
+
+	//接下来复制进程页表。即在线性地址空间中设置新任务代码段和数据段描述符中的基址
+	//和限长，并复制页表。如果出错（返回值不是0），则复位任务数组中相应项并释放为
+	//该新任务分配的用于任务结构的内存页。
 	if (copy_mem(nr,p)) {
 		task[nr] = NULL;
 		free_page((long) p);
 		return -EAGAIN;
 	}
+
+	// 如果父进程中有文件是打开的，则将对应文件的打开次数增1。因为这里创建的子进程
+	// 会与父进程共享这些打开的文件。将当前进程（父进程）的pwd,root和executable
+	// 引用次数均增1。与上面同样的道理，子进程也引用了这些i节点。
 	for (i=0; i<NR_OPEN;i++)
 		if (f=p->filp[i])
 			f->f_count++;
@@ -195,6 +211,13 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		current->root->i_count++;
 	if (current->executable)
 		current->executable->i_count++;
+
+	// 随后在GDT表中设置新任务TSS段和LDT段描述符项。这两个段的限长均被设置成104
+	// 字节。set_tss_desc和set_ldt_desc的定义参见include/asm/system.h文件
+	// “gdt+(nr<<1)+FIRST_TSS_ENTRY”是任务nr的TSS描述符项在全局
+	// 表中的地址。因为每个任务占用GDT表中2项，因此上式中要包括(nr<<1)。
+	// 程序然后把新进程设置成就绪态。另外在任务切换时，任务寄存器tr由CPU自动加载。
+	// 最后返回新进程号。
 	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY,&(p->tss));
 	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY,&(p->ldt));
 	p->state = TASK_RUNNING;	/* do this last, just in case */
