@@ -5,32 +5,37 @@
  */
 
 /*
- *  'buffer.c' implements the buffer-cache functions. Race-conditions have
- * been avoided by NEVER letting a interrupt change a buffer (except for the
- * data, of course), but instead letting the caller do it. NOTE! As interrupts
- * can wake up a caller, some cli-sti sequences are needed to check for
- * sleep-on-calls. These should be extremely quick, though (I hope).
+buffer.c用于实现缓冲区高速缓存功能。通过不让中断处理过程改变缓冲区，而是让调
+用者来执行，避免了竞争条件（当然除改变数据以外）。注意！由于中断可以唤醒一个调
+用者，因此就需要开关中断指令(cli-sti)序列来检测由于调用而睡眠。但需要非常地快
+(我希望是这样)。
  */
 
 /*
- * NOTE! There is one discordant note here: checking floppies for
- * disk change. This is where it fits best, I think, as it should
- * invalidate changed floppy-disk-caches.
+注意！有一个程序应不属于这里：检测软盘是否更换。但我想这里是放置
+该程序最好的地方了，因为它需要使已更换软盘缓冲失效。
  */
 
-#include <stdarg.h>
+#include <stdarg.h>					//标准参数头文件。以宏的形式定义变量参数列表。主要说明了-个类型(va_list)和三个宏(va_start,va_arg和va_end),用于vsprintf、vprintf、vfprintf函数.
  
-#include <linux/config.h>
-#include <linux/sched.h>
-#include <linux/kernel.h>
-#include <asm/system.h>
-#include <asm/io.h>
+#include <linux/config.h>			//内核配置头文件。定义键盘语言和硬盘类型(HD_TYPE)可选项。
+#include <linux/sched.h>			//调度程序头文件，定义了任务结构task_struct、任务0的数据，还有一些有关描述符参数设置和获取的嵌入式汇编函数宏语句。
+#include <linux/kernel.h>			//内核头文件。含有一些内核常用函数的原形定义。
+#include <asm/system.h>				//系统头文件。定义了设置或修改描述符中断门等的嵌入汇编宏。
+#include <asm/io.h>					//io头文件。定义硬件端口输入/输出宏汇编语句。
 
+
+// 		变量end是由编译时的连接程序ld生成，用于表明内核代码的末端，即指明内核模块末端
+// 位置。也可以从编译内核时生成的System.map文件中查出。这里用它来表明高速缓冲区开始于内核代码末瑞位置。
+// 		buffer_wait变量是等待空闲缓冲块而睡眠的任务队列头指针。它与缓冲块头
+// 部结构中b_wait指针的作用不同。当任务申请一个缓冲块而正好遇到系统缺乏可用空闲缓
+// 冲块时，当前任务就会被添加到buffer_wait睡眠等待队列中。而b_wait则是专门供等待
+// 指定缓冲块（即b_wait对应的缓冲块）的任务使用的等待队列头指针。
 extern int end;
 struct buffer_head * start_buffer = (struct buffer_head *) &end;
 struct buffer_head * hash_table[NR_HASH];
-static struct buffer_head * free_list;
-static struct task_struct * buffer_wait = NULL;
+static struct buffer_head * free_list;					//空闲缓冲块链表头指针
+static struct task_struct * buffer_wait = NULL;			//等待空闲缓冲块而睡眠的任务队列
 int NR_BUFFERS = 0;
 
 static inline void wait_on_buffer(struct buffer_head * bh)
