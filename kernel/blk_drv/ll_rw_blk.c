@@ -142,10 +142,19 @@ repeat:
 	add_request(major+blk_dev,req);
 }
 
+// 低层读写数据块函数(Low Level Read Write Block).
+// 该函数是块设备驱动程序与系统其他部分的接口函数。通常在fs/buffer.c程序中被调用。
+// 主要功能是创建块设备读写请求项并插入到指定块设备请求队列中。实际的读写操作则是
+// 由设备的request_fn函数完成。对于硬盘操作，该函数是do_hd_request,对于软盘
+// 操作，该函数是do_fd_request,对于虚拟盘则是do_d_request。另外，在调用该函
+// 数之前，调用者需要首先把读/写块设备的信息保存在缓冲块头结构中，如设备号、块号。
+// 参数：rw-READ、READA、WRITE或WRITEA是命令：bh-数据缓冲块头指针。
 void ll_rw_block(int rw, struct buffer_head * bh)
 {
-	unsigned int major;
+	unsigned int major;// 主设备号(对于硬盘是3)
 
+	// 如果设备主设备号不存在或者该设备的请求操作函数不存在,则显示出错信息，并返回。
+	// 否则创建请求项并插入请求队列
 	if ((major=MAJOR(bh->b_dev)) >= NR_BLK_DEV ||
 	!(blk_dev[major].request_fn)) {
 		printk("Trying to read nonexistent block-device\n\r");

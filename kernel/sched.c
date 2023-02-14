@@ -208,6 +208,28 @@ int sys_pause(void)
 // 程序中变量的值。但是指针*p指向的目标（这里是任务结构）会改变，因此为了能修改调用该
 // 函数程序中原来就是指针变量的值，就需要传递指针'*p'的指针，即'**p'。参见图8-6中p指针
 // 的使用情况。
+// https://blog.csdn.net/as480133937/article/details/120876758   	要修改X,就传递X的指针!
+// https://blog.csdn.net/jinking01/article/details/123481284	 	c/c++实际都是传值,传入指针也是拷贝的一个指向相同位置的新指针
+/*
+#include <stdio.h>
+int tmp = 11;
+void swap(int *a, int *b)
+{
+	int temp = *a;
+	*a = *b;
+	b = &tmp;
+	printf("swap a = %d,b = %d\n", *a, *b);		//20, 11
+}
+int main(void)
+{
+	int a = 10;
+	int b = 20;
+	printf("before swap:a = %d,b = %d\n", a, b);//10,20
+	swap(&a, &b);
+	printf("after swap:a = %d,b = %d\n", a, b);	//20,20
+	return 0;
+}
+*/
 void sleep_on(struct task_struct **p)
 {
 	struct task_struct *tmp;
