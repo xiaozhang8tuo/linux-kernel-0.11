@@ -546,6 +546,7 @@ void buffer_init(long buffer_end)
 	free_list->b_prev_free = h; 			//链表头的b_prev_free指向前一项（即最后一项）。
 	h->b_next_free = free_list; 			//h的下一项指针指向第一项，形成一个环链.
 
+	// 初始化hash表(哈希表,散列数组)，置表中所有指针为NULL
 	for (i=0;i<NR_HASH;i++)
 		hash_table[i]=NULL;
 }	
