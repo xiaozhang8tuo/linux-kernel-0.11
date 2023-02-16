@@ -246,34 +246,49 @@ void iput(struct m_inode * inode)
 		return;
 	}
 
-	
+	// 如果i节点对应的设备号=0,则此节点的引用计数-1,返回。例如用于管道操作的i节点,其节点设备号为0
 	if (!inode->i_dev) {
 		inode->i_count--;
 		return;
 	}
+
+	// 如果是块设备文件的i节点,此时逻辑块字段(i_zone[0])中是设备号,则刷新该设备。并等待i节点解锁。
 	if (S_ISBLK(inode->i_mode)) {
 		sync_dev(inode->i_zone[0]);
 		wait_on_inode(inode);
 	}
+	// 如果i节点的引用计数大于1，则计数递减1后就直接返回（因为该i节点还有人在用，不能
+	// 释放)，否则就说明i节点的引用计数值为1（因为已经判断过引用计数是否为零）。
 repeat:
 	if (inode->i_count>1) {
 		inode->i_count--;
 		return;
 	}
+	// 如果i节点的链接数为0，则说明i节点对应文件被删除。于是释放该i节点的所有逻辑块，
+	// 并释放该i节点。函数free_inode用于实际释放i节点操作，即复位i节点对应的i节点位
+	// 图比特位，清空i节点结构内容。
 	if (!inode->i_nlinks) {
 		truncate(inode);
 		free_inode(inode);
 		return;
 	}
+	// 如果该i节点已作过修改，则回写更新该i节点，并等待该i节点解锁。由于这里在写i节
+	// 点时需要等待睡眠，此时其他进程有可能修改该i节点，因此在进程被唤醒后需要再次重复
+	// 进行上述判断过程(repeat).
 	if (inode->i_dirt) {
 		write_inode(inode);	/* we can sleep - so do again */
 		wait_on_inode(inode);
 		goto repeat;
 	}
+	// 程序若能执行到此，则说明该i节点的引用计数值i_cont是1、链接数不为零，并且内容
+	// 没有被修改过。因此此时只要把i节点引用计数递减1，返回。此时该i节点的i_count=0,
+	// 表示已释放。
 	inode->i_count--;
 	return;
 }
 
+// 从i节点表(inode table)中获取一个空闲i节点项.
+// 寻找引用计数count为0的i节点，并将其写盘后清零，返回其指针。引用计数被置1。
 struct m_inode * get_empty_inode(void)
 {
 	struct m_inode * inode;
@@ -281,67 +296,106 @@ struct m_inode * get_empty_inode(void)
 	int i;
 
 	do {
+		// 在初始化last_inode指针指向i节点表头一项后循环扫描整个i节点表。如果last_inode
+		// 已经指向i节点表的最后1项之后，则让其重新指向i节点表开始处，以继续循环寻找空闲
+		// i节点项。如果last_inode所指向的i节点的计数值为0，则说明可能找到空闲i节点项。
+		// 让inode指向该i节点。如果该i节点的已修改标志和锁定标志均为0，则我们可以使用该
+		// i节点，于是退出for循环。
 		inode = NULL;
 		for (i = NR_INODE; i ; i--) {
 			if (++last_inode >= inode_table + NR_INODE)
 				last_inode = inode_table;
 			if (!last_inode->i_count) {
 				inode = last_inode;
-				if (!inode->i_dirt && !inode->i_lock)
+				if (!inode->i_dirt && !inode->i_lock) 	// 引用计数值为0, 已修改标志和锁定标志均为0
 					break;
 			}
 		}
+		// 如果没有找到,debug_print
 		if (!inode) {
 			for (i=0 ; i<NR_INODE ; i++)
 				printk("%04x: %6d\t",inode_table[i].i_dev,
 					inode_table[i].i_num);
 			panic("No free inodes in mem");
 		}
+		// 等待该i节点解锁（如果又被上锁的话）。如果该i节点已修改标志被置位的话，则将该
+		// i节点刷新（同步）。因为刷新时可能会睡眠，因此需要再次循环等待该i节点解锁。
 		wait_on_inode(inode);
 		while (inode->i_dirt) {
 			write_inode(inode);
 			wait_on_inode(inode);
 		}
+	// 如果i节点又被其他占用的话(i节点的计数值不为0了)，则重新寻找空闲i节点。否则
+	// 说明已找到符合要求的空闲i节点项。则将该i节点项内容清零，并置引用计数为1，返回
+	// 该i节点指针。
 	} while (inode->i_count);
 	memset(inode,0,sizeof(*inode));
 	inode->i_count = 1;
 	return inode;
 }
 
+///获取管道节点。
+// 首先扫描i节点表，寻找一个空闲i节点项，然后取得一页空闲内存供管道使用。然后将得
+// 到的i节点的引用计数置为2（读者和写者），初始化管道头和尾，置i节点的管道类型表示。
+// 返回为i节点指针，如果失败则返回NULL。
 struct m_inode * get_pipe_inode(void)
 {
 	struct m_inode * inode;
 
+	// 首先从内存i节点表中取得一个空闲i节点。如果找不到空闲i节点则返回NULL。然后为该
+	// i节点申请一页内存，并让节点的isze字段指向该页面。如果已没有空闲内存，则释放该
+	// i节点，并返回NULL。
 	if (!(inode = get_empty_inode()))
 		return NULL;
 	if (!(inode->i_size=get_free_page())) {
 		inode->i_count = 0;
 		return NULL;
 	}
+	// 然后设置该i节点的引用计数为2，并复位复位管道头尾指针。i节点逻辑块号数组i_zone[]
+	// 的i_zone[0]和i_zone[1]中分别用来存放管道头和管道尾指针。最后设置i节点是管道i节
+	// 点标志并返回该1节点号。
 	inode->i_count = 2;	/* sum of readers/writers */
-	PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0;
+	PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0;	//管道对应的逻辑块i_zone[0/1]为0
 	inode->i_pipe = 1;
 	return inode;
 }
 
+// 取一个i节点
+// 参数：dev-设备号：nr-i节点号。
+// 从设备上读取指定节点号的i节点到内存i节点表中，并返回该i节点指针。
+// 首先在位于高速缓冲区中的i节点表中搜寻，若找到指定节点号的i节点则在经过一些判断
+// 处理后返回该i节点指针。否则从设备dev上读取指定i节点号的i节点信总放入i节点表
+// 中，并返回该i节点指针。
 struct m_inode * iget(int dev,int nr)
 {
 	struct m_inode * inode, * empty;
 
+	// 首先判断参数有效性。若设备号是0，则表明内核代码问题，显示出错信息并停机。然后预
+	// 先从节点表中取一个空闲1节点备用。
 	if (!dev)
 		panic("iget with dev==0");
 	empty = get_empty_inode();
+
+	// 接着扫描i节点表。寻找参数指定节点号nr的i节点。并递增该节点的引用次数。如果当
+	// 前扫描i节点的设备号不等于指定的设备号或者节点号不等于指定的节点号，则继续扫描。
 	inode = inode_table;
 	while (inode < NR_INODE+inode_table) {
 		if (inode->i_dev != dev || inode->i_num != nr) {
 			inode++;
 			continue;
 		}
+		// 如果找到指定设备号dev和节点号nr的i节点，则等待该节点解锁（如果已上锁的话）。
+		// 在等待该节点解锁过程中，节点表可能会发生变化。所以再次进行上述相同判断。如果发
+		// 生了变化，则再次重新扫描整个i节点表。
 		wait_on_inode(inode);
 		if (inode->i_dev != dev || inode->i_num != nr) {
 			inode = inode_table;
 			continue;
 		}
+		// 到这里表示找到相应的节点。于是将该i节点引用计数增1。然后再作进一步检查，看它
+		// 是否是另一个文件系统的安装点。若是则寻找被安装文件系统根节点并返回。如果该i节点
+		// 的确是其他文件系统的安装点，则在超级块表中搜寻安装在此i节点的超级块。如果没有找
+		// 到，则显示出错信息，并放回本函数开始时获取的空闲节点empty,返回该i节点指针。
 		inode->i_count++;
 		if (inode->i_mount) {
 			int i;
@@ -355,16 +409,25 @@ struct m_inode * iget(int dev,int nr)
 					iput(empty);
 				return inode;
 			}
+
+			// 执行到这里表示已经找到安装到inode节点的文件系统超级块。于是将该i节点写盘放回，
+			// 并从安装在此i节点上的文件系统超级块中取设备号，并令i节点号为ROOT_INO,即为1。
+			// 然后重新扫描整个i节点表，以获取该被安装文件系统的根i节点信息。
 			iput(inode);
-			dev = super_block[i].s_dev;
+			dev = super_block[i].s_dev;	//使用新的dev和nr，继续搜索
 			nr = ROOT_INO;
 			inode = inode_table;
 			continue;
 		}
+		// 最终我们找到了相应的i节点。因此可以放弃本函数开始处临时申请的空闲1节点，返回
+		// 找到的i节点指针。
 		if (empty)
 			iput(empty);
 		return inode;
 	}
+
+	// 如果我们在i节点表中没有找到指定的i节点，则利用前面申请的空闲i节点empty在i
+	// 节点表中建立该i节点。并从相应设备上读取该i节点信息，返回该i节点指针。
 	if (!empty)
 		return (NULL);
 	inode=empty;
