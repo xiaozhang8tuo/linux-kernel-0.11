@@ -91,8 +91,8 @@ void sync_inodes(void)
 	}
 }
 
-// 文件数据块映射到盘块的处理操作。(block位图处理函数，bmap-block map)
-// 参数：inode-文件的i节点指针 block-文件中的数据块号 create-创建块标志。
+// 文件数据块映射到盘块的处理操作。(block位图处理函数，bmap-block map)   对于文件中的第x个数据块，对应的是磁盘上的逻辑块y，返回y，根据(dev, y)去访问对应的块
+// 参数：inode-文件的i节点指针 block-文件中的数据块号 create-创建块标志
 // 该函数把指定的文件数据块block对应到设备上的逻辑块上，并返回逻辑块号。如果创建标志
 // 置位，则在设备上对应逻辑块不存在时就申请新磁盘块，返回文件数据块block对应在设备
 // 上的逻辑块号（盘块号）。
@@ -202,7 +202,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
 }
 
 // 取文件数据块block在设备上对应的逻辑块号。
-// 参数：inode-文件的内存i节点指针：block-文件中的数据块号。若操作成功则返回对应的逻辑块号，否则返回0。
+// 参数：inode-文件的内存i节点指针：block-文件中的数据块号。若操作成功则返回对应设备的逻辑块号，否则返回0。
 int bmap(struct m_inode * inode,int block)
 {
 	return _bmap(inode,block,0);
