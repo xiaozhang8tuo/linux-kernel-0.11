@@ -152,8 +152,8 @@ struct super_block {
 	struct buffer_head * s_imap[8];		// i 节点位图缓冲块指针数组(8块, 可表示64M) 8 * 1024 * 8(bit) * BLOCKSIZE(1024)
 	struct buffer_head * s_zmap[8];		// 逻辑块位图缓冲块指针数组
 	unsigned short s_dev;				// 超级块所在设备号
-	struct m_inode * s_isup;			// 被安装的文件系统根目录的i节点 
-	struct m_inode * s_imount;			// 被安装到的i节点
+	struct m_inode * s_isup;			// 被安装的文件系统根目录的i节点 			//根设备的super_block: s_isup和s_imount是一样的 (只有根设备的s_isup才赋值)
+	struct m_inode * s_imount;			// 被安装到的i节点 (一个目录类型的inode)
 	unsigned long s_time;				// 修改时间
 	struct task_struct * s_wait;		// 等待该超级块的进程
 	unsigned char s_lock;				// 被锁定标志
