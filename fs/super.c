@@ -246,12 +246,21 @@ static struct super_block * read_super(int dev)
 	return s;
 }
 
+// 卸载文件系统（系统调用）
+// 参数dev_name是文件系统所在设备的设备文件名。
+// 该函数首先根据参数给出的块设备文件名获得设备号，然后复位文件系统超级块中的相应字
+// 段，释放超级块和位图占用的缓冲块，最后对该设备执行高速缓冲与设备上数据的同步操作。
+// 若卸载操作成功则返回0，否则返回出错码。
 int sys_umount(char * dev_name)
 {
 	struct m_inode * inode;
 	struct super_block * sb;
 	int dev;
 
+	// 首先根据设备文件名找到对应的节点，并取其中的设备号。设备文件所定义设备的设备号
+	// 是保存在其i节点的i_zone[0]中的。参见后面namei.c程序中系统调用sys_mknod()的代
+	// 码。另外，由于文件系统需要存放在块设备上，因此如果不是块设备文件，则放回
+	// 刚申请的i节点dev_i,返回出错码.
 	if (!(inode=namei(dev_name)))
 		return -ENOENT;
 	dev = inode->i_zone[0];
@@ -259,32 +268,53 @@ int sys_umount(char * dev_name)
 		iput(inode);
 		return -ENOTBLK;
 	}
+
+	// OK,现在上面为了得到设备号而取得的i节点已完成了它的使命，因此这里放回该设备文件
+	// 的i节点。接着我们来检查一下卸载该文件系统的条件是否满足。如果设备上是根文件系统，
+	// 则不能被卸截，返回忙出错号。
 	iput(inode);
 	if (dev==ROOT_DEV)
 		return -EBUSY;
+	// 如果在超级块表中没有找到该设备上文件系统的超级块，或者已找到但是该设备上文件系统
+	// 没有安装过，则返回出错码。如果超级块所指明的被安装到的i节点并没有置位其安装标志
+	// i_mout,则显示警告信息。然后查找一下i节点表，看看是否有进程在使用该设备上的文
+	// 件，如果有则返回忙出错码。
 	if (!(sb=get_super(dev)) || !(sb->s_imount))
 		return -ENOENT;
 	if (!sb->s_imount->i_mount)
 		printk("Mounted inode has i_mount=0\n");
-	for (inode=inode_table+0 ; inode<inode_table+NR_INODE ; inode++)
+	for (inode=inode_table+0 ; inode<inode_table+NR_INODE ; inode++)	//已经不再使用该设备上的文件
 		if (inode->i_dev==dev && inode->i_count)
 				return -EBUSY;
+	
+	// 现在该设备上文件系统的卸载条件均得到满足，因此我们可以开始实施卸截操作了。
+	// 首先复位被安装到的i节点的安装标志，释放该ⅰ节点。然后置超级块中被安装i节点字段
+	// 为空，并放回设备文件系统的根i节点，接着置超级块中被安装系统根i节点指针为空。
 	sb->s_imount->i_mount=0;
 	iput(sb->s_imount);
 	sb->s_imount = NULL;
 	iput(sb->s_isup);
 	sb->s_isup = NULL;
+	// 最后我们释放该设备上的超级块以及位图占用的高速缓冲块，并对该设备执行高速缓冲与设
+	// 备上数据的同步操作。然后返回0（卸截成功）。
 	put_super(dev);
 	sync_dev(dev);
 	return 0;
 }
 
+// 安装文件系统（系统调用）。
+// 参数dev_name是设备文件名，dir_name是安装到的目录名，rw_flag被安装文件系统的可
+// 读写标志。将被加载的地方必须是一个目录名，并且对应的节点没有被其他程序占用。
+// 若操作成功则返回0，否则返回出错号。
 int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 {
 	struct m_inode * dev_i, * dir_i;
 	struct super_block * sb;
 	int dev;
 
+	// 首先根据设备文件名找到对应的i节点，以取得其中的设备号。对于块特殊设备文件，设备
+	// 号在其i节点的i_zone[0]中。另外，由于文件系统必须在块设备中，因此如果不是块设备
+	// 文件，则放回刚取得的i节点dev_i,返回出错码。
 	if (!(dev_i=namei(dev_name)))
 		return -ENOENT;
 	dev = dev_i->i_zone[0];
@@ -292,6 +322,13 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 		iput(dev_i);
 		return -EPERM;
 	}
+
+	// OK,现在上面为了得到设备号而取得的i节点dev_i已完成了它的使命，因此这里放回该设
+	// 备文件的i节点。接着我们来检查一下文件系统安装到的目录名是否有效。于是根据给定的
+	// 目录文件名找到对应的i节点dir_i。如果该节点的引用计数不为1（仅在这里引用），
+	// 或者该i节点的节点号是根文件系统的节点号1，则放回该i节点返回出错码。另外，如果
+	// 该节点不是一个目录文件节点，则也放回该1节点，返回出错码。因为文件系统只能安装在
+	// 一个目录名上。
 	iput(dev_i);
 	if (!(dir_i=namei(dir_name)))
 		return -ENOENT;
@@ -303,10 +340,17 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 		iput(dir_i);
 		return -EPERM;
 	}
+
+	// 现在安装点也检查完毕，我们开始读取要安装文件系统的超级块信息。如果读超级块操作失
+	// 败，则放回该安装点i节点dir_i并返回出错码。一个文件系统的超级块会首先从超级块表
+	// 中进行搜索，如果不在超级块表中就从设备上读取。
 	if (!(sb=read_super(dev))) {
 		iput(dir_i);
 		return -EBUSY;
 	}
+	// 在得到了文件系统超级块之后，我们对它先进行检测一番。如果将要被安装的文件系统已经
+	// 安装在其他地方，则放回该i节点，返回出错码。如果将要安装到的i节点已经安装了文件
+	// 系统（安装标志已经置位），则放回该i节点，也返回出错码。
 	if (sb->s_imount) {
 		iput(dir_i);
 		return -EBUSY;
@@ -315,20 +359,33 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 		iput(dir_i);
 		return -EPERM;
 	}
+	
+	// 最后设置被安装文件系统超级块的“被安装到i节点”字段指向安装到的目录名的i节点。
+	// 并设置安装位置i节点的安装标志和节点已修改标志。然后返回0（安装成功）。
 	sb->s_imount=dir_i;
 	dir_i->i_mount=1;
 	dir_i->i_dirt=1;		/* NOTE! we don't iput(dir_i) */
 	return 0;			/* we do that in umount */
 }
 
+
+// 安装根文件系统
+// 该函数属于系统初始化操作的一部分。函数首先初始化文件表数组file_table和超级块表super_block
+// (数组)，然后读取根文件系统超级块，并取得文件系统根i节点。最后统计并显示出根文
+// 件系统上的可用资源(空闲块数和空闲i节点数)。该函数会在系统开机进行初始化设置时sys_setup被调用blk_drv/hd.c
 void mount_root(void)
 {
 	int i,free;
 	struct super_block * p;
 	struct m_inode * mi;
 
+	// 若磁盘i节点结构不是32字节，则出错停机。该判断用于防止修改代码时出现不一致情况
 	if (32 != sizeof (struct d_inode))
 		panic("bad i-node size");
+	// 首先初始化文件表数组（共64项，即系统同时只能打开64个文件）和超级块表。这里将所
+	// 有文件结构中的引用计数设置为0（表示空闲），并把超级块表中各项结构的设备字段初始
+	// 化为0（也表示空闲）。如果根文件系统所在设备是软盘的话，就提示“插入根文件系统盘，
+	// 并按回车键”，并等待按键。
 	for(i=0;i<NR_FILE;i++)
 		file_table[i].f_count=0;
 	if (MAJOR(ROOT_DEV) == 2) {
@@ -336,23 +393,42 @@ void mount_root(void)
 		wait_for_keypress();
 	}
 	for(p = &super_block[0] ; p < &super_block[NR_SUPER] ; p++) {
-		p->s_dev = 0;
+		p->s_dev = 0;									// 初始化超级块表
 		p->s_lock = 0;
 		p->s_wait = NULL;
 	}
+
+	// 做好以上“份外”的初始化工作之后，我们开始安装根文件系统。于是从根设备上读取文件
+	// 系统超级块，并取得文件系统的根i节点(1号节点)在内存i节点表中的指针。如果读根
+	// 设备上超级块失败或取根节点失败，则都显示信息并停机。
 	if (!(p=read_super(ROOT_DEV)))
 		panic("Unable to mount root");
-	if (!(mi=iget(ROOT_DEV,ROOT_INO)))
+	if (!(mi=iget(ROOT_DEV, ROOT_INO)))
 		panic("Unable to read root i-node");
-	mi->i_count += 3 ;	/* NOTE! it is logically used 4 times, not 1 */
-	p->s_isup = p->s_imount = mi;
-	current->pwd = mi;
-	current->root = mi;
+
+	// 现在我们对超级块和根i节点进行设置。把根i节点引用次数递增3次。因为下面415行上
+	// 也引用了该i节点。另外，iget()函数中i节点引用计数已被设置为1。然后置该超级块的
+	// 被安装文件系统i节点和被安装到i节点字段为该i节点。再设置当前进程的当前工作目录
+	// 和根目录i节点。此时当前进程是1号进程(init进程)。
+	mi->i_count += 3 ;	/* NOTE! it is logically used 4 times, not 1   因为iget()函数中i节点引用计数已被设置为1,所以设置成4,只要+3*/
+	p->s_isup = p->s_imount = mi;	// 2
+	current->pwd = mi;				// 1	共4
+	current->root = mi;				// 1
+
+	// 然后我们对根文件系统上的资源作统计工作。统计该设备上空闲块数和空闲i节点数。首先
+	// 令i等于超级块中表明的设备逻辑块总数。然后根据逻辑块位图中相应比特位的占用情况统
+	// 计出空闲块数。这里宏函数set_bit只是在测试比特位，而非设置比特位。"i&8191”用于
+	// 取得i节点号在当前位图块中对应的比特位偏移值。”>13”是将i除以8192，也即除一个
+	// 磁盘块包含的比特位数。
 	free=0;
 	i=p->s_nzones;
 	while (-- i >= 0)
-		if (!set_bit(i&8191,p->s_zmap[i>>13]->b_data))
+		if (!set_bit(i&8191,p->s_zmap[i>>13]->b_data))			// i>>13得到逻辑块位图的indx, i&8191是对应逻辑块位图的第几位
 			free++;
+	// 在显示过设备上空闲逻辑块数/逻辑块总数之后。我们再统计设备上空闲i节点数。首先令
+	// 等于超级块中表明的设备上i节点总数+1。加1是将0节点也统计进去。然后根据i节点位
+	// 图中相应比特位的占用情况计算出空闲1节点数。最后再显示设备上可用空闲i节点数和
+	// 节点总数。
 	printk("%d/%d free blocks\n\r",free,p->s_nzones);
 	free=0;
 	i=p->s_ninodes+1;
