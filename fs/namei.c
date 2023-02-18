@@ -318,6 +318,9 @@ static struct buffer_head * add_entry(struct m_inode * dir,
 // 搜寻指定路径名的目录（或文件名）的i节点。
 // 参数：pathname-路径名。
 // 返回：目录或文件的i节点指针。失败时返回NULL。
+// usr/src/linux  : src						  linux不是最顶层目录,因为后面没有/
+// usr/src/linux/ : linux
+// usr/src/linux/1.txt : linux                可知道最顶层目录是  [xxx]/的形式
 static struct m_inode * get_dir(const char * pathname)
 {
 	char c;
@@ -357,7 +360,7 @@ static struct m_inode * get_dir(const char * pathname)
 	// 点或者是当前工作目录的i节点。
 	inode->i_count++;
 	while (1) {						//	home/zyx/1.txt 一定是根据/去遍历的查找对应的inode
-		thisname = pathname;		//  循环3次: home/zyx/1.txt    zyx/1.txt   1.txt 
+		thisname = pathname;		//  循环3次: home/zyx/1.txt    zyx/1.txt   1.txt(此时inode为zyx)
 		if (!S_ISDIR(inode->i_mode) || !permission(inode,MAY_EXEC)) {
 			iput(inode);
 			return NULL;
@@ -401,6 +404,9 @@ static struct m_inode * get_dir(const char * pathname)
 // 返回：指定目录名最顶层目录的i节点指针 | 最顶层目录名称及长度。      
 // pathname: /home/zyx/video  则 namelen:5 name:video          
 // 出错时返回NULL。注意!! 这里"最顶层目录"是指路径名中最靠近末端的目录。
+// usr/src/linux  : 		返回src			name:linux		len:5					  
+// usr/src/linux/ :			返回linux		name:""			len:0
+// usr/src/linux/1.txt : 	返回linux       name:1.txt   	len:4
 static struct m_inode * dir_namei(const char * pathname,
 	int * namelen, const char ** name)
 {
@@ -435,9 +441,9 @@ static struct m_inode * dir_namei(const char * pathname,
 // pathname:路径名
 // 返回对应的i节点
 // 即:
-// usr/src/ 				src节点				dir_namei
-// usr/src/linux			src下搜linux目录	iget
-// usr/src/linux/1.txt: 	linux下搜1.txt文件	iget
+// usr/src/ 				src节点				dir_namei后返回src
+// usr/src/linux			src下搜linux目录	iget后返回linux
+// usr/src/linux/1.txt: 	linux下搜1.txt文件	iget后返回1.txt
 struct m_inode * namei(const char * pathname)
 {
 	const char * basename;
@@ -484,6 +490,15 @@ struct m_inode * namei(const char * pathname)
  *
  * namei for open - this is in fact almost the whole open-routine.  如何实现一个open调用
  */
+// namei
+// 参数filename是文件名，flag是打开文件标志，它可取值：O_RDONLY(只读)、O_WRONLY
+// (只写)或O_RDWR(读写)，以及O_CREAT(创建)、O_EXCL(被创建文件必须不存在)、
+// O_APPEND(在文件尾添加数据)等其他一些标志的组合。如果本调用创建了一个新文件，则
+// mode就用于指定文件的许可属性。这些属性有S_IRWXU(文件宿主具有读、写和执行权限)、
+// S_IRUSR(用户具有读文件权限)、S_IRWXG(组成员具有读、写和执行权限)等等。对于新
+// 创建的文件，这些属性只应用于将来对文件的访问，创建了只读文件的打开调用也将返回一
+// 个可读写的文件句柄。参见相关文件sys/stat.h、fcntl.h。
+// 返回：成功返回0，否则返回出错码：res_inode 返回对应文件路径名的i节点指针。
 int open_namei(const char * pathname, int flag, int mode,
 	struct m_inode ** res_inode)
 {
@@ -493,10 +508,19 @@ int open_namei(const char * pathname, int flag, int mode,
 	struct buffer_head * bh;
 	struct dir_entry * de;
 
+	// 首先对函数参数进行合理的处理。如果文件访问模式标志是只读(0)，但是文件截零标志
+	// O_TRUNC却置位了，则在文件打开标志中添加只写标志O_WRONLY。这样做的原因是由于截零
+	// 标志O_TRUNC必须在文件可写情况下才有效。然后使用当前进程的文件访问许可屏蔽码，屏
+	// 蔽掉给定模式中的相应位，并添上普通文件标志I_REGULAR。该标志将用于打开的文件不存
+	// 在而需要创建文件时，作为新文件的默认属性。
 	if ((flag & O_TRUNC) && !(flag & O_ACCMODE))
 		flag |= O_WRONLY;
 	mode &= 0777 & ~current->umask;
 	mode |= I_REGULAR;
+	// 然后根据指定的路径名寻找到对应的i节点，以及最顶端目录名及其长度。此时如果最顶瑞
+	// 目录名长度为0（例如'src/'这种路径名的情况），那么若操作不是读写、创建和文件长
+	// 度截0，则表示是在打开一个目录名文件操作。于是直接返回该目录的i节点并返回0退出。
+	// 否则说明进程操作非法，于是放回该i节点，返回出错码。
 	if (!(dir = dir_namei(pathname,&namelen,&basename)))
 		return -ENOENT;
 	if (!namelen) {			/* special case: '/usr/' etc */
@@ -507,6 +531,12 @@ int open_namei(const char * pathname, int flag, int mode,
 		iput(dir);
 		return -EISDIR;
 	}
+
+	// 接着根据上面得到的最顶层目录名的i节点dir,在其中查找取得路径名字符串中最后的文
+	// 件名对应的目录项结构de,并同时得到该目录项所在的高速缓冲区指针。如果该高速缓冲
+	// 指针为NULL,则表示没有找到对应文件名的目录项，因此只可能是创建文件操作。此时如
+	// 果不是创建文件，则放回该目录的节点，返回出错号退出。如果用户在该目录没有写的权
+	// 力，则放回该目录的节点，返回出错号退出。
 	bh = find_entry(&dir,basename,namelen,&de);
 	if (!bh) {
 		if (!(flag & O_CREAT)) {
@@ -517,6 +547,11 @@ int open_namei(const char * pathname, int flag, int mode,
 			iput(dir);
 			return -EACCES;
 		}
+
+		// 现在我们确定了是创建操作并且有写操作许可。因此我们就在目录i节点对应设备上申请
+		// 一个新的i节点给路径名上指定的文件使用。若失败则放回目录的i节点，并返回没有空
+		// 间出错码。否则使用该新i节点，对其进行初始设置：置节点的用户id:对应节点访问模
+		// 式：置已修改标志。然后并在指定目录dir中添加一个新目录项。
 		inode = new_inode(dir->i_dev);
 		if (!inode) {
 			iput(dir);
@@ -526,6 +561,11 @@ int open_namei(const char * pathname, int flag, int mode,
 		inode->i_mode = mode;
 		inode->i_dirt = 1;
 		bh = add_entry(dir,basename,namelen,&de);
+		// 如果返回的应该含有新目录项的高速缓冲区指针为NULL,则表示添加目录项操作失败。于是
+		// 将该新i节点的引用连接计数诚1，放回该i节点与目录的i节点并返回出错码退出。否则
+		// 说明添加目录项操作成功。于是我们来设置该新目录项的一些初始值：置i节点号为新申请
+		// 到的i节点的号码：并置高速缓冲区已修改标志。然后释放该高速缓冲区，放回目录的i节
+		// 点。返回新目录项的i节点指针，并成功退出。
 		if (!bh) {
 			inode->i_nlinks--;
 			iput(inode);
@@ -539,12 +579,19 @@ int open_namei(const char * pathname, int flag, int mode,
 		*res_inode = inode;
 		return 0;
 	}
+
+	// 若上面在目录中取文件名对应目录项结构的操作成功（即bh不为NULL),则说
+	// 明指定打开的文件已经存在。于是取出该目录项的i节点号和其所在设备号，并释放该高速
+	// 缓冲区以及放回目录的i节点。如果此时独占操作标志0EXCL置位，但现在文件已经存在，
+	// 则返回文件已存在出错码退出。
 	inr = de->inode;
 	dev = dir->i_dev;
 	brelse(bh);
 	iput(dir);
 	if (flag & O_EXCL)
 		return -EEXIST;
+	// 然后我们读取该目录项的i节点内容。若该i节点是一个目录的i节点并且访问模式是只
+	// 写或读写，或者没有访问的许可权限，则放回该节点，返回访问权限出错码退出。
 	if (!(inode=iget(dev,inr)))
 		return -EACCES;
 	if ((S_ISDIR(inode->i_mode) && (flag & O_ACCMODE)) ||
@@ -552,6 +599,9 @@ int open_namei(const char * pathname, int flag, int mode,
 		iput(inode);
 		return -EPERM;
 	}
+	
+	// 接着我们更新该i节点的访问时间字段值为当前时间。如果设立了截0标志，则将该i节
+	// 点的文件长度截为0。最后返回该目录项i节点的指针，并返回0（成功）。
 	inode->i_atime = CURRENT_TIME;
 	if (flag & O_TRUNC)
 		truncate(inode);
