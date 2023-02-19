@@ -138,7 +138,7 @@ struct d_super_block {
 	unsigned short s_magic;				// 文件系统魔数
 };
 
-// 内存中的磁盘超级块结构
+// 内存中的磁盘超级块结构  负责管理inode和逻辑块，通过位图的方式
 struct super_block {
 	unsigned short s_ninodes;			// i节点数
 	unsigned short s_nzones;			// 逻辑块数
