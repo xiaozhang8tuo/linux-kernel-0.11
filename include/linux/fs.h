@@ -57,9 +57,12 @@ void buffer_init(long buffer_end);
 // 每个逻辑块可存放的目录项数
 #define DIR_ENTRIES_PER_BLOCK ((BLOCK_SIZE)/(sizeof (struct dir_entry)))
 
+// 循环队列结构PIPE (队列长度要是2^n大小)
+// 对于这种队列，我们通常空出了一个元素位置来表达队列是否已满。比如如果back==front 则表示管道为空，
+// 如果为满的话就不能还用这个表示了，(不然我们如何区分究竟谁是满的谁是空的), 通常是在队头空出一个位置，比如这里我们就是用back==front+1 表示已满
 #define PIPE_HEAD(inode) ((inode).i_zone[0]) // 管道头
 #define PIPE_TAIL(inode) ((inode).i_zone[1]) // 管道尾
-#define PIPE_SIZE(inode) ((PIPE_HEAD(inode)-PIPE_TAIL(inode))&(PAGE_SIZE-1))// 管道大小: &(PAGE_SIZE-1) 取整页大小
+#define PIPE_SIZE(inode) ((PIPE_HEAD(inode)-PIPE_TAIL(inode))&(PAGE_SIZE-1))// 管道大小: &(PAGE_SIZE-1) 不超过一页   4&(8-1) = 4
 #define PIPE_EMPTY(inode) (PIPE_HEAD(inode)==PIPE_TAIL(inode))				// 管道空
 #define PIPE_FULL(inode) (PIPE_SIZE(inode)==(PAGE_SIZE-1))					// 管道满
 #define INC_PIPE(head) \													// 管道头指针递增
