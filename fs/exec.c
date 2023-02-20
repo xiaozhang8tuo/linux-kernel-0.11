@@ -378,7 +378,7 @@ restart_interp:
 		buf[1022] = '\0';
 		if (cp = strchr(buf, '\n')) {
 			*cp = '\0';					// 第一个换行符换成NULL并去掉空格指标符
-			for (cp = buf; (*cp == ' ') || (*cp == '\t'); cp++);
+			for (cp = buf; (*cp == ' ') || (*cp == '\t'); cp++);//cp指向sh_bang后的非空格
 		}
 		if (!cp || *cp == '\0') {		//若该行没有其他内容,则出错
 			retval = -ENOEXEC; /* No interpreter name found */
@@ -416,8 +416,8 @@ restart_interp:
 		// 复制串函数执行完后，环境参数串信息块位于程序命令行参数串信息块的上方，并且p指向
 		// 程序的第1个参数串。copy_strings最后一个参数(0)指明参数字符串在用户空间。
 		if (sh_bang++ == 0) {
-			p = copy_strings(envc, envp, page, p, 0);
-			p = copy_strings(--argc, argv+1, page, p, 0);
+			p = copy_strings(envc, envp, page, p, 0);	 //envp
+			p = copy_strings(--argc, argv+1, page, p, 0);// argv
 		}
 		/*
 		 * Splice in (1) the interpreter's name for argv[0] 		argv[0]中放解释程序的名称
@@ -433,13 +433,13 @@ restart_interp:
 		// filename在用户空间，而这里赋予copy_strings()的脚本文件名指针在内核空间，因此
 		// 这个复制字符串函数的最后一个参数（字符串来源标志）需要被设置成1。若字符串在
 		// 内核空间，则copy_strings的最后一个参数要设置成2
-		p = copy_strings(1, &filename, page, p, 1);
+		p = copy_strings(1, &filename, page, p, 1);//filename
 		argc++;
 		if (i_arg) {								// 复制解释程序的多个参数
-			p = copy_strings(1, &i_arg, page, p, 2);
+			p = copy_strings(1, &i_arg, page, p, 2);// iarg
 			argc++;
 		}
-		p = copy_strings(1, &i_name, page, p, 2);
+		p = copy_strings(1, &i_name, page, p, 2);// bash
 		argc++;
 		if (!p) {
 			retval = -ENOMEM;
