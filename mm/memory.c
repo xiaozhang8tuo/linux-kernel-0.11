@@ -426,19 +426,19 @@ void write_verify(unsigned long address)
 	// 首先取指定线性地址对应的页目录项，根据目录项中的存在位(P)判断目录项对应的页表
 	// 是否存在（存在位P=1?),若不存在(P=0)则返回。这样处理是因为对于不存在的页面没
 	// 有共享和写时复制可言，并且若程序对此不存在的页面执行写操作时，系统就会因为缺页异
-	// 常而去执行do_no_page,并为这个地方使用put_page()函数映射一个物理页面。
+	// 常而去执行do_no_page,并为这个地方使用put_page函数映射一个物理页面。  (page此时是页表的物理地址)
 	if (!( (page = *((unsigned long *) ((address>>20) & 0xffc)) )&1))
 		return;
 	
 	// 接着程序从目录项中取页表地址，加上指定页面在页表中的页表项偏移值，得对应地址的页
 	// 表项指针。在该表项中包含着给定线性地址对应的物理页面。
 	page &= 0xfffff000;
-	page += ((address>>10) & 0xffc);
+	page += ((address>>10) & 0xffc);		//此时page(是页表项)是指针(指向某一物理页的起始地址),后面可以通过un_wp_page,改变其指向让其指向其他(新)页的起始地址
 
 	// 然后判断该页表项中的位1(R/W)、位0(P)标志。如果该页面不可写(R/W=0)且存在，
 	// 那么就执行共享检验和复制页面操作（写时复制）。否则什么也不做，直接退出。
 	if ((3 & *(unsigned long *) page) == 1)  /* non-writeable, present */
-		un_wp_page((unsigned long *) page);
+		un_wp_page((unsigned long *) page);	// 在这里page的指向可能就变了(传入传出)  *page = 新页的起始地址，page
 	return;
 }
 
