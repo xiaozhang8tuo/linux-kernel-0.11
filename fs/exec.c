@@ -66,13 +66,13 @@ static unsigned long * create_tables(char * p,int argc,int envc)
 	// 一个NULL值。此时sp指向参数指针块的起始处，我们将环境参数块指针envp和命令行参
 	// 数块指针以及命令行参数个数值分别压入栈中。
 	sp = (unsigned long *) (0xfffffffc & (unsigned long) p);	//4字节对齐
-	sp -= envc+1;
+	sp -= envc+1;//开辟envc+1的空间(入栈,栈指针下移)
 	envp = sp;
-	sp -= argc+1;
+	sp -= argc+1;//开辟argc+1的空间(入栈,栈指针下移)
 	argv = sp;
 	put_fs_long((unsigned long)envp,--sp);
 	put_fs_long((unsigned long)argv,--sp);
-	put_fs_long((unsigned long)argc,--sp);
+	put_fs_long((unsigned long)argc,--sp);//三个参数入栈
 	
 	// 再将命令行各参数指针和环境变量各指针分别放入前面空出来的相应地方，最后分别放置一
 	// 个NULL指针。
@@ -279,7 +279,11 @@ static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 // filename-被执行程序文件名指针：
 // argv-命令行参数指针数组的指针：
 // envp~环境变量指针数组的指针。
-// 返回：如果调用成功，则不返回：否则设置出错号，并返回-1。
+// 返回：如果调用成功，则不返回：否则设置出错号，并返回-1
+// 1:把参数信息值放在页数组中对应的页中
+// 2:把调整ldt最顶端是参数页
+// 3:创建argc,argv,envp指针指向参数表(参数表项指向参数)
+// 4:调整eip,sp
 int do_execve(unsigned long * eip,long tmp,char * filename,
 	char ** argv, char ** envp)
 {
@@ -433,7 +437,7 @@ restart_interp:
 		// filename在用户空间，而这里赋予copy_strings()的脚本文件名指针在内核空间，因此
 		// 这个复制字符串函数的最后一个参数（字符串来源标志）需要被设置成1。若字符串在
 		// 内核空间，则copy_strings的最后一个参数要设置成2
-		p = copy_strings(1, &filename, page, p, 1);//filename
+		p = copy_strings(1, &filename, page, p, 1);//filename  $0
 		argc++;
 		if (i_arg) {								// 复制解释程序的多个参数
 			p = copy_strings(1, &i_arg, page, p, 2);// iarg
@@ -548,7 +552,7 @@ restart_interp:
 	// 为栈指针值。然后调用内部函数create_tables在栈空间中创建环境和参数变量指针表，
 	// 供程序的main作为参数使用，并返回该栈指针。
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
-	p = (unsigned long) create_tables((char *)p,argc,envc);
+	p = (unsigned long) create_tables((char *)p,argc,envc);//最新的栈指针
 
 	// 接着再修改进程各字段值为新执行文件的信息。即令进程任务结构代码尾字段end_code等
 	// 于执行文件的代码段长度a_text:数据尾字段end_data等于执行文件的代码段长度加数
