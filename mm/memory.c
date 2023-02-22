@@ -7,6 +7,7 @@
 /*
  * demand-loading started 01.12.91 - seems it is high on the list of
  * things wanted, and it should be easy to implement. - Linus
+ * 需求加如截是从01.12.91开始编写的-在程序编制表中似乎是最重要的程序，并且应该是很容易编制的
  */
 
 /*
@@ -28,6 +29,8 @@
 #include <linux/head.h>
 #include <linux/kernel.h>
 
+// 函数名前的关键字volatile用于告诉编译器gcc该函数不会返回。这样可让gcc产生更好一
+// 些的代码，更重要的是使用这个关键字可以避免产生某些（未初始化变量的）假警告信息。
 volatile void do_exit(long code);
 
 static inline volatile void oom(void)
@@ -94,7 +97,7 @@ __asm__("std ; repne ; scasb\n\t"		// 置方向位,al(0)与对应每个页面的
 	"sall $12,%%ecx\n\t"				// 左移12位, 页面数*4K = 相对页面起始地址
 	"addl %2,%%ecx\n\t"					// 再加上低端内存地址,得到页面实际物理起始地址
 	"movl %%ecx,%%edx\n\t"				// 页面的实际起始地址->edx
-	"movl $1024,%%ecx\n\t"				// 寄存器ecx置10224
+	"movl $1024,%%ecx\n\t"				// 寄存器ecx置1024
 	"leal 4092(%%edx),%%edi\n\t"		// 将4092+edx的位置->edi
 	"rep ; stosl\n\t"					// stosl store EAX at address ES:(E)DI ,页面内存清零
 	"movl %%edx,%%eax\n"				// 返回页面的起始地址->eax
@@ -218,6 +221,13 @@ int free_page_tables(unsigned long from,unsigned long size)
 // 页面也已经超出我们的需求，但这不会占用更多的内存一在低1Mb内存
 // 范围内我们不执行写时复制操作，所以这些页面可以与内核共享。因此这
 // 是nr=xxxx的特殊情况(nr在程序中指页面数)。
+
+// 复制页目录表项和页表项。
+// 复制指定线性地址和长度内存对应的页目录项和页表项，从而被复制的页目录和页表对应
+// 的原物理内存页面区被两套页表映射而共享使用。复制时，需申请新页面来存放新页表，
+// 原物理内存区将被共享。此后两个进程（父进程和其子进程）将共享内存区，直到有一个
+// 进程执行写操作时，内核才会为写操作进程分配新的内存页（写时复制机制）
+// 参数from、to是线性地址，size是需要复制（共享）的内存长度，单位是字节。
 int copy_page_tables(unsigned long from,unsigned long to,long size)
 {
 	unsigned long * from_page_table;
@@ -308,25 +318,48 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
  * out of memory (either when trying to access page-table or
  * page.)
  */
+// 下面函数将一内存页面放置（映射）到指定线性地址处。它返回页面
+// 的物理地址，如果内存不够（在访问页表或页面时），则返回0。
+// 把一物理内存页面映射到线性地址空间指定处。
+// 或者说是把线性地址空间中指定地址address处的页面映射到主内存区页面page上。主要
+// 工作是在相关页目录项和页表项中设置指定页面的信息。若成功则返回物理页面地址。在
+// 处理缺页异常的C函数do_no_page中会调用此函数。对于缺页引起的异常，由于任何缺
+// 页缘故而对页表作修改时，并不需要刷新CPU的页变换缓冲（或称Translation Lookaside
+// Buffer-TLB),即使页表项中标志P被从0修改成1。因为无效页项不会被缓冲，因此当
+// 修改了一个无效的页表项时不需要刷新。在此就表现为不用调用Invalidate()函数。
+// 参数page是分配的主内存区中某一页面（页帧，页框）的指针；āddress是线性地址。
 unsigned long put_page(unsigned long page,unsigned long address)
 {
 	unsigned long tmp, *page_table;
 
-/* NOTE !!! This uses the fact that _pg_dir=0 */
+/* NOTE !!!!!!!!!     This uses the fact that _pg_dir=0 */
 
+	// 首先判断参数给定物理内存页面page的有效性。如果该页面位置低于L0WME(1MB)或
+	// 超出系统实际含有内存高端HIGH_MEMORY,则发出警告。LOW_MEM是主内存区可能有的最
+	// 小起始位置。当系统物理内存小于或等于6MB时，主内存区起始于LOW_MEM处。再查看一
+	// 下该page页面是否是已经申请的页面，即判断其在内存页面映射字节图mem_map中相
+	// 应字节是否已经置位。若没有则需发出警告。
 	if (page < LOW_MEM || page >= HIGH_MEMORY)
 		printk("Trying to put page %p at %p\n",page,address);
 	if (mem_map[(page-LOW_MEM)>>12] != 1)
 		printk("mem_map disagrees with %p at %p\n",page,address);
+
+	// 然后根据参数指定的线性地址address计算其在页目录表中对应的目录项指针，并从中取得
+	// 二级页表地址。如果该目录项有效(P=1),即指定的页表在内存中，则从中取得指定页表
+	// 地址放到page_table变量中。否则就申请一空闲页面给页表使用，并在对应目录项中置相
+	// 应标志(7-User、U/S、R/W)。然后将该页表地址放到page_table变量中。
 	page_table = (unsigned long *) ((address>>20) & 0xffc);
 	if ((*page_table)&1)
-		page_table = (unsigned long *) (0xfffff000 & *page_table);
+		page_table = (unsigned long *) (0xfffff000 & *page_table);//此时page_table指向二级页表
 	else {
 		if (!(tmp=get_free_page()))
 			return 0;
 		*page_table = tmp|7;
 		page_table = (unsigned long *) tmp;
 	}
+	// 最后在找到的页表page_table中设置相关页表项内容，即把物理页面page的地址填入表
+	// 项同时置位3个标志(U/S、WR、P)。该页表项在页表中的索引值等于线性地址位21-
+	// 位12组成的10比特的值。每个页表共可有1024项(0-0x3ff)。
 	page_table[(address>>12) & 0x3ff] = page | 7;
 /* no need for invalidate */
 	return page;
