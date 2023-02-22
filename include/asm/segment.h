@@ -22,7 +22,7 @@ extern inline unsigned long get_fs_long(const unsigned long *addr)
 	return _v;
 }
 
-// https://zhuanlan.zhihu.com/p/435518616 fs/gs寄存器
+// https://zhuanlan.zhihu.com/p/435518616 fs/gs寄存器    https://www.zhihu.com/question/19728793 为什么要拷贝而不是直接访问or memcpy
 extern inline void put_fs_byte(char val,char *addr)
 {
 __asm__ ("movb %0,%%fs:%1"::"r" (val),"m" (*addr));
