@@ -372,8 +372,9 @@ unsigned long put_page(unsigned long page,unsigned long address)
 // 均被设置成只读页面。而当新进程或原进程需要向内存页面写数据时，CPU就会检测到这个
 // 情况并产生页面写保护异常。于是在这个函数中内核就会首先判断要写的页面是否被共享。
 // 若没有则把页面设置成可写然后退出。若页面是出于共享状态，则需要重新申请一新页面并
-// 复制被写页面内容，以供写进程单独使用。共享被取消。本函数供下面do_wp_page()调用。
+// 复制被写页面内容，以供写进程单独使用。共享被取消。本函数供下面do_wp_page调用。
 // [ un_wp_page : Un-Write Protect Page]
+// 输入参数页表项指针，是物理地址
 void un_wp_page(unsigned long * table_entry)
 {
 	unsigned long old_page,new_page;
@@ -409,7 +410,14 @@ void un_wp_page(unsigned long * table_entry)
  * and decrementing the shared-page counter for the old page.
  *
  * If it's in code space we exit with a segment error.
+ * 当用户试图往一共享页面上写时，该函数处理已存在的内存页面（写时复制）
+ * 它是通过将页面复制到一个新地址上并且递减原页面的共享计数值实现的。
+ * 如果它在代码空间，我们就显示段出错信总并退出。
  */
+// 执行写保护页面处理。
+// 是写共享页面处理函数。是页异常中断处理过程中调用的C函数。在page.s程序中被调用。
+// 参数error_code是进程在写写保护页面时由CPU自动产生，address是页面线性地址。
+// 写共享页面时，需复制页面（写时复制）。
 void do_wp_page(unsigned long error_code,unsigned long address)
 {
 #if 0
@@ -418,7 +426,7 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 	if (CODE_SPACE(address))
 		do_exit(SIGSEGV);
 #endif
-	// 调用上面函数un_wp_page()来处理取消页面保护。但首先需要为其准备好参数。参数是
+	// 调用上面函数un_wp_page来处理取消页面保护。但首先需要为其准备好参数。参数是
 	// 线性地址address指定页面在页表中的页表项指针，其计算方法是：
 	// 1：(address>l0)&0xffc: 计算指定线性地址中页表项在页表中的偏移地址：因为
 	// 根据线性地址结构，(address>12)就是页表项中的索引，但每项占4个字节，因此乘
@@ -475,10 +483,15 @@ void write_verify(unsigned long address)
 	return;
 }
 
+// 取得一页空闲内存页并映射到指定线性地址处。
+// get_free_page仅是申请取得了主内存区的一页物理内存。而本函数则不仅是获取到一页
+// 物理内存页面，还进一步调用put_page,将物理页面映射到指定的线性地址处。
+// 参数address是指定页面的线性地址.
 void get_empty_page(unsigned long address)
 {
 	unsigned long tmp;
 
+	// 若不能取得一空闲页面，或者不能将所取页面放置到指定地址处，则显示内存不够的信息。
 	if (!(tmp=get_free_page()) || !put_page(tmp,address)) {
 		free_page(tmp);		/* 0 is ok - ignored */
 		oom();
@@ -492,7 +505,18 @@ void get_empty_page(unsigned long address)
  *
  * NOTE! This assumes we have checked that p != current, and that they
  * share the same executable.
+ * try_to_share在任务p中检查位于地址address处的页面，看页面是否存在，是否干净。
+ * 如果是干净的话，就与当前任务共享。
+ * 注意,这里我们已假定p!=当前任务，并且它们共享同一个执行程序。
  */
+// 尝试对当前进程指定地址处的页面进行共享处理。
+// 当前进程与进程p是同一执行代码，也可以认为   [当前进程是由p进程执行fork操作产生的]
+// 进程，因此它们的代码内容一样。如果未对数据段内容作过修改那么数据段内容也应一样。
+// 
+// 参数address是进程中的逻辑地址，即是当前进程欲与p进程共享页面的逻辑页面地址，
+// 进程p是将被共享页面的进程。如果p进程address处的页面存在并且没有被修改过的话，
+// 就让当前进程与p进程共享之。同时还需要险证指定的地址处是否已经申请了页面，若是
+// 则出错，死机。返回：1页面共享处理成功：0失败。
 static int try_to_share(unsigned long address, struct task_struct * p)
 {
 	unsigned long from;
@@ -501,39 +525,75 @@ static int try_to_share(unsigned long address, struct task_struct * p)
 	unsigned long to_page;
 	unsigned long phys_addr;
 
+	// 首先分别求得指定进程p中和当前进程中逻辑地址address对应的页目录项。为了计算方便
+	// 先求出指定逻辑地址address处的'逻辑'页目录项号，即以进程空间(0~64MB)算出的页
+	// 目录项号。该'逻辑'页目录项号加上进程p在CPU 4G线性空间中起始地址对应的页目录项,
+	// 即得到进程p中地址address处页面所对应的4G线性空间中的实际页目录项from_page.
+	// 而'逻辑'页目录项号加上当前进程CPU4G线性空间中起始地址对应的页目录项，即可最后
+	// 得到当前进程中地址address处页面所对应的4G线性空间中的实际页目录项to_page。
 	from_page = to_page = ((address>>20) & 0xffc);
-	from_page += ((p->start_code>>20) & 0xffc);
+	from_page += ((p->start_code>>20) & 0xffc);			//p进程目录项
 	to_page += ((current->start_code>>20) & 0xffc);
-/* is there a page-directory at from? */
+
+	// 在得到p进程和当前进程address对应的目录项后，下面分别对进程p和当前进程进行处理。
+	// 下面首先对p进程的表项进行操作。目标是取得p进程中address对应的物理内存页面地址，
+	// 并且该物理页面存在，而且干净（没有被修改过，不脏）。
+	// 方法是先取目录项内容。如果该目录项无效(P=0),表示目录项对应的二级页表不存在，
+	// 于是返回。否则取该目录项对应页表地址from,从而计算出逻辑地址address对应的页表项
+	// 指针，并取出该页表项内容临时保存在phys_addr中。
+	/* is there a page-directory at from? */
 	from = *(unsigned long *) from_page;
 	if (!(from & 1))
 		return 0;
 	from &= 0xfffff000;
 	from_page = from + ((address>>10) & 0xffc);
 	phys_addr = *(unsigned long *) from_page;
-/* is the page clean and present? */
+
+	/* is the page clean and present? */ //物理页面存在且干净吗
+	// 接着看看页表项映射的物理页面是否存在并且干净。0x41对应页表项中的D(Dirty)和
+	// P(Present)标志。如果页面不干净或无效则返回。然后我们从该表项中取出物理页面地址
+	// 再保存在phys_addr中。最后我们再检查一下这个物理页面地址的有效性，即它不应该超过
+	// 机器最大物理地址值，也不应该小于内存低端(1B)。
 	if ((phys_addr & 0x41) != 0x01)
 		return 0;
 	phys_addr &= 0xfffff000;
 	if (phys_addr >= HIGH_MEMORY || phys_addr < LOW_MEM)
 		return 0;
+
+	// 下面首先对当前进程的表项进行操作。目标是取得当前进程中address对应的页表项地址，
+	// 并且该页表项还没有映射物理页面，即其P=0。
+	// 首先取当前进程页目录项内容to。如果该目录项无效(P=0),即目录项对应的二级页表
+	// 不存在，则申请一空闲页面来存放页表，并更新目录项to_page内容，让其指向该内存页面。
 	to = *(unsigned long *) to_page;
 	if (!(to & 1))
 		if (to = get_free_page())
 			*(unsigned long *) to_page = to | 7;
 		else
 			oom();
+	
+	// 否则取目录项中的页表地址-->t0，加上页表项索值<<2，即页表项在表中偏移地址，得到
+	// 页表项地址to_page。针对该页表项，如果此时我们检查出其对应的物理页面已经存在，
+	// 即页表项的存在位P=1, 则说明原本我们想共享进程p中对应的物理页面，但现在我们自己
+	// 已经占有了（映射有）物理页面。于是说明内核出错，死机。
 	to &= 0xfffff000;
 	to_page = to + ((address>>10) & 0xffc);
-	if (1 & *(unsigned long *) to_page)
+	if (1 & *(unsigned long *) to_page)		// 自己已经有了就不能再和别人共享了
 		panic("try_to_share: to_page already exists");
-/* share them: write-protect */
-	*(unsigned long *) from_page &= ~2;
-	*(unsigned long *) to_page = *(unsigned long *) from_page;
+	
+	// 在找到了进程p中逻辑地址address处对应的干净且存在的物理页面，而且也确定了当前
+	// 进程中逻辑地址ddress所对应的二级页表项地址之后，我们现在对他们进行共享处理。
+	// 方法很简单，就是首先对p进程的页表项进行修改，设置其写保护(R/=0,只读)标志，
+	// 然后让当前进程复制p进程的这个页表项。此时当前进程逻辑地址address处页面即被
+	// 映射到p进程逻辑地址address处页面映射的物理页面上。
+	/* share them: write-protect */
+	*(unsigned long *) from_page &= ~2;//只读(写保护)
+	*(unsigned long *) to_page = *(unsigned long *) from_page;//共享
 	invalidate();
+	// 随后刷新页变换高速缓冲。计算所操作物理页面的页面号，并将对应页面映射字节数组项中
+	// 的引用递增1。最后返回1，表示共享处理成功。
 	phys_addr -= LOW_MEM;
 	phys_addr >>= 12;
-	mem_map[phys_addr]++;
+	mem_map[phys_addr]++;//从LOW_MEM之后的页作为起始页
 	return 1;
 }
 
@@ -544,28 +604,62 @@ static int try_to_share(unsigned long address, struct task_struct * p)
  *
  * We first check if it is at all feasible by checking executable->i_count.
  * It should be >1 if there are other tasks sharing this inode.
+ * share_page试图找到一个进程，它可以与当前进程共享页面。参数address是当前进程数据空间中期望共享的某页面地址。
+ * 首先我们通过检测executable->i_count来查证是否可行。如果有其他任务已共享该inode,则它应该大于1。
  */
+
+// 共享页面处理。
+// 在发生缺页异常时，首先看看能否与运行同一个执行文件的其他进程进行页面共享处理。
+// 该函数首先判断系统中是否有另一个进程也在运行当前进程一样的执行文件。若有，则在
+// 系统当前所有任务中寻找这样的任务。若找到了这样的任务就尝试与其共享指定地址处的
+// 页面。若系统中没有其他任务正在运行与当前进程相同的执行文件，那么共享页面操作的
+// 前提条件不存在，因此函数立刻退出。判断系统中是否有另一个进程也在执行同一个执行
+// 文件的方法是利用进程任务数据结构中的executable字段。该字段指向进程正在执行程
+// 序在内存中的i节点。根据该i节点的引用次数icou我们可以进行这种判断。若
+// executable->i_count值大于1，则表明系统中可能有两个进程在运行同一个执行文件，
+// 于是可以再对任务结构数组中所有任务比较是否有相同的executable字段来最后确定多
+// 个进程运行着相同执行文件的情况。
+// 参数address是进程中的逻辑地址，即是当前进程欲与p进程共享页面的逻辑页面地址。
+// 返回1共享操作成功，0失败
 static int share_page(unsigned long address)
 {
 	struct task_struct ** p;
 
+	// 首先检查一下当前进程的executable字段是否指向某执行文件的i节点，以判断本进程
+	// 是否有对应的执行文件。如果没有，则返回0。如果executable的确指向某个i节点，
+	// 则检查该i节点引用计数值。如果当前进程运行的执行文件的内存i节点引用计数等于
+	// 1(executable->i_count=1),表示当前系统中只有1个进程（即当前进程）在运行该
+	// 执行文件。因此无共享可言，直接退出函数。
 	if (!current->executable)
 		return 0;
 	if (current->executable->i_count < 2)
 		return 0;
+	
+	// 否则搜索任务数组中所有任务。寻找与当前进程可共享页面的进程，即运行相同执行文件
+	// 的另一个进程，并尝试对指定地址的页面进行共享。如果找到某个进程p其executable
+	// 字段值与当前进程的相同，则调用try_to_share尝试页面共享。若共享操作成功，则
+	// 函数返回1。否则返回0，表示共享页面操作失收。
 	for (p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
-		if (!*p)
+		if (!*p)									
 			continue;
 		if (current == *p)
 			continue;
 		if ((*p)->executable != current->executable)
 			continue;
 		if (try_to_share(address,*p))
-			return 1;
+			return 1;	// 共享成功页面
 	}
 	return 0;
 }
 
+
+// 执行缺页处理。
+// 是访问不存在页面处理函数。页异常中断处理过程中调用的函数。在page.s程序中被调用。
+// 函数参数error_code和address是进程在访问页面时由CPU因缺页产生异常而自动生成。
+// 该函数首先尝试与已加载的相同文件进行页面共亭，或者只是由于进程动态申请内存页面而
+// 只需映射一页物理内存页即可。若共亭操作不成功，那么只能从相应文件中读入所缺的数据
+// 页面到指定线性地址处。
+// error_code指出出错类型，：address是产生异常的页面线性地址
 void do_no_page(unsigned long error_code,unsigned long address)
 {
 	int nr[4];
@@ -573,62 +667,116 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	unsigned long page;
 	int block,i;
 
-	address &= 0xfffff000;
-	tmp = address - current->start_code;
-	if (!current->executable || tmp >= current->end_data) {
+	// 首先取线性空间中指定地址address处页面地址。从而可算出指定线性地址在进程空间中
+	// 相对于进程基址的偏移长度值p,即对应的逻辑地址。
+	address &= 0xfffff000;					//address处缺页页面线性地址
+	tmp = address - current->start_code;	//缺页页面对应的逻辑地址  即start_code记录的也是address地址
+
+	// 若当前进程的executable节点指针空，或者指定地址超出（代码+数据）长度，则申请
+	// 一页物理内存，并映射到指定的线性地址处。executable是进程正在运行的执行文件的i
+	// 节点结构。由于任务0和任务1的代码在内核中，因此任务0、任务1以及任务1派生的
+	// 没有调用过execve的所有任务的executable都为0。若该值为0，或者参数指定的线性
+	// 地址超出代码加数据长度，则表明进程在申请新的内存页面存放堆或栈中数据。因此直接
+	// 调用取空闲页面函数get_empty_page为进程申请一页物理内存并映射到指定线性地址
+	// 处。进程任务结构字段start_code是线性地址空间中进程代码段地址，字段end_data
+	// 是代码加数据长度。对于Linux0.11内核，它的代码段和数据段起始基址相同。
+	if (!current->executable || tmp >= current->end_data) { 	//end_code记录的是逻辑地址
 		get_empty_page(address);
 		return;
 	}
-	if (share_page(tmp))
+
+	// 否则说明所缺页面在进程执行文件范围内，于是就尝试共享页面操作，若成功则退出，
+	// 若不成功就只能申请一页物理内存页面page,然后从设备上读取执行文件中的相应页面并
+	// 放置（映射）到进程页面逻辑地址tmp处
+	if (share_page(tmp))		// 申请一页物理内存
 		return;
 	if (!(page = get_free_page()))
 		oom();
-/* remember that 1 block is used for header */
-	block = 1 + tmp/BLOCK_SIZE;
+	/* remember that 1 block is used for header */
+	// 记住，（程序）头要使用1个数据块*/
+	// 因为块设备上存放的执行文件映像第1块数据是程序头结构，因此在读取该文件时需要跳过
+	// 第1块数据。所以需要首先计算缺页所在的数据块号。因为每块数据长度为BLOCK_SIZE=
+	// 1KB,因此一页内存可存放4个数据块。进程逻辑地址tmp即除以数据块大小再加1即可得出
+	// 缺少的页面在执行映像文件中的起始块号block。根据这个块号和执行文件的i节点，我们
+	// 就可以从映射位图中找到对应块设备中对应的设备逻辑块号（保存在nr[]数组中）。利用
+	// bread_page即可把这4个逻辑块读入到物理页面page中。
+	block = 1 + tmp/BLOCK_SIZE;							// 执行文件中起始数据块号
 	for (i=0 ; i<4 ; block++,i++)
-		nr[i] = bmap(current->executable,block);
-	bread_page(page,current->executable->i_dev,nr);
+		nr[i] = bmap(current->executable,block);		// 设备上对应的逻辑块号
+	bread_page(page,current->executable->i_dev,nr);		// 读设备上4个逻辑块
+	// 在读设备逻辑块操作时，可能会出现这样一种情况，即在执行文件中的读取页面位置可能离
+	// 文件尾不到1个页面的长度。因此就可能读入一些无用的信息。下面的操作就是把这部分超
+	// 出执行文件end data以后的部分清零处理。
 	i = tmp + 4096 - current->end_data;
 	tmp = page + 4096;
 	while (i-- > 0) {
 		tmp--;
 		*(char *)tmp = 0;
 	}
-	if (put_page(page,address))
+	// 最后把引起缺页异常的一页物理页面映射到指定线性地址address处。若操作成功就返回。
+	// 否则就释放内存页，显示内存不够。
+	if (put_page(page,address))		//页映射到对应的线性地址,内部操作就是与或对应的标志位，高效
 		return;
 	free_page(page);
 	oom();
 }
 
+// 物理内存管理初始化。
+// 该函数对1MB以上内存区域以页面为单位进行管理前的初始化设置工作。一个页面长度为
+// 4KB字节。该函数把1MB以上所有物理内存划分成一个个页面，并使用一个页面映射字节
+// 数组mem_map来管理所有这些页面。对于具有16MB内存容量的机器，该数组共有3840
+// 项((16MB·1MB)/4KB),即可管理3840个物理页面。每当一个物理内存页面被占用时就
+// 把mem_map[]中对应的的字节值增1：若释放一个物理页面，就把对应字节值减1。若字
+// 节值为0，则表示对应页面空闲：若字节值大于或等于1，则表示对应页面被占用或被不
+// 同程序共享占用。
+// 在该版本的Liux内核中，最多能管理16MB的物理内存，大于16MB的内存将弃置不用。
+// 对于具有16MB内存的PC机系统，在没有设置虚拟盘RAMDISK的情况下start_mem通常
+// 是4MB,end_mem是16MB。因此此时主内存区范围是4MB一l6MB,共有3072个物理页面可
+// 供分配。而范围0-1MB内存空间用于内核系统（其实内核只使用0一640KB,利下的部
+// 分被部分高速缓冲和设备内存占用)。
+// 参数start_mem是可用作页面分配的主内存区起始地址（已去除RAMDISK所占内存空间）·
+// end_mem是实际物理内存最大地址。而地址范围start_men到end_mem是主内存区。
 void mem_init(long start_mem, long end_mem)
 {
 	int i;
 
+	// 首先将1MB到16MB范围内所有内存页面对应的内存映射字节数组项置为已占用状态，即各
+	// 项字节值全部设置成USED(100)。PAGING_PAGES被定义为(PAGING MEMORY>>12),即1MB
+	// 以上所有物理内存分页后的内存页面数(15MB/4KB=3840)。
 	HIGH_MEMORY = end_mem;
 	for (i=0 ; i<PAGING_PAGES ; i++)
 		mem_map[i] = USED;
-	i = MAP_NR(start_mem);
+	// 然后计算主内存区起始内存start_mem处页面对应内存映射字节数组中项号i和主内存区
+	// 页面数。此时mem_map[]数组的第i项正对应主内存区中第1个页面。最后将主内存区中
+	// 页面对应的数组项清零（表示空闲）。对于具有16B物理内存的系统，mem map[们中对应
+	// 4b-16Mb主内存区的项被清零。
+	i = MAP_NR(start_mem);			// 主内存区起始位置处页面号
 	end_mem -= start_mem;
-	end_mem >>= 12;
+	end_mem >>= 12;					// 主内存区中的总页面数
 	while (end_mem-->0)
-		mem_map[i++]=0;
+		mem_map[i++]=0;				// 主内存区页面对应字节值清零
 }
 
+
+// 计算内存空闲页面数并显示
 void calc_mem(void)
 {
 	int i,j,k,free=0;
 	long * pg_tbl;
 
+	// 扫描内存页面映射数组mem_map[]，获取空闲页面数并显示。然后扫描所有页目录项(除0，
+	// 1项)，如果页目录项有效，则统计对应页表中有效页面数，并显示。页目录项0一3被内核
+	// 使用，因此应该从第5个目录项(i=4)开始扫描。
 	for(i=0 ; i<PAGING_PAGES ; i++)
-		if (!mem_map[i]) free++;
-	printk("%d pages free (of %d)\n\r",free,PAGING_PAGES);
+		if (!mem_map[i]) free++;					
+	printk("%d pages free (of %d)\n\r",free,PAGING_PAGES);	// 空闲的物理页面数量
 	for(i=2 ; i<1024 ; i++) {
 		if (1&pg_dir[i]) {
 			pg_tbl=(long *) (0xfffff000 & pg_dir[i]);
 			for(j=k=0 ; j<1024 ; j++)
 				if (pg_tbl[j]&1)
 					k++;
-			printk("Pg-dir[%d] uses %d pages\n",i,k);
+			printk("Pg-dir[%d] uses %d pages\n",i,k);// 页表i对应的有效页表项k (注意不同k可以映射到同一个物理页)
 		}
 	}
 }
