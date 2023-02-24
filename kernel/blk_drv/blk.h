@@ -164,13 +164,13 @@ extern inline void end_request(int uptodate)
 // 核程序出了问题，于是显示出错信总并停机。
 #define INIT_REQUEST \
 repeat: \
-	if (!CURRENT) \
+	if (!CURRENT) \												// 如果当前请求结构指针NULL则返回
 		return; \
-	if (MAJOR(CURRENT->dev) != MAJOR_NR) \
+	if (MAJOR(CURRENT->dev) != MAJOR_NR) \						//如果当前设备的主设备号不对则死机
 		panic(DEVICE_NAME ": request list destroyed"); \
 	if (CURRENT->bh) { \
 		if (!CURRENT->bh->b_lock) \
-			panic(DEVICE_NAME ": block not locked"); \
+			panic(DEVICE_NAME ": block not locked"); \			//如果请求项的缓冲区没锁定则死机
 	}
 
 #endif
