@@ -493,7 +493,7 @@ void do_hd_request(void)
 	
 	__asm__("divl %4":"=a" (cyl),"=d" (head):"0" (block),"1" (0),	// 初始时eax是计算出的对应总磁道数，edx中置0。divl指令把edx:eax的对应总磁道数除以硬盘总磁头数(hd_info[dev].head)，
 		"r" (hd_info[dev].head));									// 在eax中得到的整除值是柱面号(cyl),edx中得到的余数就是对应得当前磁头号(head)
-	sec++;							// 对计算所得当前磁道扇区号进行调整
+	sec++;							// 对计算所得当前磁道扇区号进行调整 在当前磁道上扇区号从1算起，于是需要把sec增1。
 	nsect = CURRENT->nr_sectors;	// 欲读/写的扇区数
 
 	// 此时我们得到了欲读写的硬盘起始扇区block所对应的硬盘上柱面号(cyl)、在当前磁道

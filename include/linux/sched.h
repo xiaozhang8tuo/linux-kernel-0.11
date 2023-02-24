@@ -19,7 +19,7 @@
 //定义进程运行可能处的状态
 #define TASK_RUNNING			0	// 进程正在运行or已经准备就绪
 #define TASK_INTERRUPTIBLE		1	// 进程处于可中断等待状态
-#define TASK_UNINTERRUPTIBLE	2	// 进程处于不可中断等待状态,主要用于I/O操作等待
+#define TASK_UNINTERRUPTIBLE	2	// 进程处于不可中断等待状态,主要用于I/O操作等待			https://segmentfault.com/a/1190000030691687  无法使用kill -9杀死的(kill也是一种信号)，除非重启系统(没错，就是这么头硬)
 #define TASK_ZOMBIE				3	// 进程处于僵死状态,已经停止运行,但父进程还没发信号
 #define TASK_STOPPED			4	// 进程已经停止
 
@@ -246,7 +246,7 @@ __asm__("str %%ax\n\t" \				//将当前任务寄存器中TSS段的选择符复�
 // 其格式为：jmp 16位段选择符:32位偏移值。但在内存中操作数的表示顺序与这里正好相反。       
 // 任务切换回来之后，在判断原任务上次执行是否使用过协处理器时，是通过将原任务指针与保存在
 // last_task_used_math变量中的上次使用过协处理器任务指针进行比较而作出的，参见文件
-// kernel/sched.c中有关math_state_restoreO函数的说明
+// kernel/sched.c中有关math_state_restore函数的说明
 #define switch_to(n) {\
 struct {long a,b;} __tmp; \
 __asm__("cmpl %%ecx,_current\n\t" \							//任务n是当前任务吗? (current == task[n]?)
