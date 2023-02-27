@@ -31,6 +31,8 @@ chr_drv.a: $(OBJS)
 	$(AR) rcs chr_drv.a $(OBJS)
 	sync
 
+# 对keyboard.S汇编程序进行预处理。-traditional选项用来对程序作修改使其支持传统的C编译器。
+# 处理后的程序改名为keyboard.s。
 keyboard.s: keyboard.S ../../include/linux/config.h
 	$(CPP) -traditional keyboard.S -o keyboard.s
 

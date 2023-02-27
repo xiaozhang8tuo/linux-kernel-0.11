@@ -42,12 +42,12 @@ struct winsize {
 
 #define NCC 8
 struct termio {
-	unsigned short c_iflag;		/* input mode flags */
-	unsigned short c_oflag;		/* output mode flags */
-	unsigned short c_cflag;		/* control mode flags */
-	unsigned short c_lflag;		/* local mode flags */
-	unsigned char c_line;		/* line discipline */
-	unsigned char c_cc[NCC];	/* control characters */
+	unsigned short c_iflag;		/* input mode flags */		//输入模式标志
+	unsigned short c_oflag;		/* output mode flags */		//输出模式标志
+	unsigned short c_cflag;		/* control mode flags */	//控制模式标志
+	unsigned short c_lflag;		/* local mode flags */		//本地模式标志
+	unsigned char c_line;		/* line discipline */		//线路进程(速率)
+	unsigned char c_cc[NCC];	/* control characters */	//控制字符数组
 };
 
 #define NCCS 17

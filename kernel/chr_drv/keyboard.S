@@ -10,7 +10,7 @@
  *		Marc Corsini for the French keyboard
  */
 
-#include <linux/config.h>
+#include <linux/config.h>	// 内核配置头文件。定义键盘语言和硬盘类型(HD_TYPE)可选项
 
 .text
 .globl _keyboard_interrupt
