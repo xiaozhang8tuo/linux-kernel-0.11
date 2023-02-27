@@ -359,7 +359,7 @@ static void rw_interrupt(void)
 	// 等待空闲请求项的进程（若有的话），从软驱设备请求项链表中删除本请求项。再继续执
 	// 行其他软盘请求顶操作。
 	floppy_deselect(current_drive);
-	end_request(1);
+	end_request(1); 	//成功完成一次请求
 	do_fd_request();
 }
 
@@ -368,9 +368,6 @@ static void rw_interrupt(void)
 // 产生一个软盘中断请求，并开始执行软盘中断处理程序。
 inline void setup_rw_floppy(void)
 {
-	
-
-
 	setup_DMA();						// 初始化软盘DMA通道
 	do_floppy = rw_interrupt;			// 置软盘中断调用函数指针。
 	output_byte(command);				// 发送命令字节。
@@ -394,7 +391,7 @@ inline void setup_rw_floppy(void)
 // 寻道处理结束后中断过程中调用的C函数。
 // 首先发送检测中断状态命令，获得状态信息ST0和磁头所在磁道信息。若出错则执行错误
 // 计数检测处理或取消本次软盘操作请求项。否则根据状态信息设置当前磁道变量，然后调
-// 用函数seup_w_loppy设置DMA并输出软盘读写命令和参数，
+// 用函数seup_rw_floppy设置DMA并输出软盘读写命令和参数，
 static void seek_interrupt(void)
 {
 	/* sense drive status */
@@ -417,51 +414,71 @@ static void seek_interrupt(void)
  * This routine is called when everything should be correctly set up
  * for the transfer (ie floppy motor is on and the correct floppy is
  * selected).
+ * 该函数是在传输操作的所有信息都正确设置好后被调用的（即软驱马达已开启
+ * 并且已选择了正确的软盘（软驱）。
  */
+// 读写数据传输函数
 static void transfer(void)
 {
-	if (cur_spec1 != floppy->spec1) {
+	// 首先检查当前驱动器参数是否就是指定驱动器的参数。若不是就发送设置驱动器参数命令
+	// 及相应参数（参数1：高4位步进速率，低四位磁头卸载时间：参数2：磁头加载时间）。
+	// 然后判断当前数据传输速率是否与指定驱动器的一致，若不是就发送指定软驱的速率值到
+	// 数据传输速率控制寄存器(FD_DCR)。
+	if (cur_spec1 != floppy->spec1) {	//检测当前参数
 		cur_spec1 = floppy->spec1;
-		output_byte(FD_SPECIFY);
-		output_byte(cur_spec1);		/* hut etc */
+		output_byte(FD_SPECIFY);		//发送设置磁盘参数命令
+		output_byte(cur_spec1);		/* hut etc */	// 发送参数
 		output_byte(6);			/* Head load time =6ms, DMA */
 	}
-	if (cur_rate != floppy->rate)
+	if (cur_rate != floppy->rate)	// 检测当前速率
 		outb_p(cur_rate = floppy->rate,FD_DCR);
+	// 若上面任何一个output_byte()操作执行出错，则复位标志reset就会被置位。因此这里
+	// 我们需要检测一下reset标志。若reset真的被置位了，就立刻去执行do_fd_request中的复位处理代码。
 	if (reset) {
 		do_fd_request();
 		return;
 	}
+
+	// 如果此时若寻道标志为零（不需要寻道），设置DMA并向软盘控制器发送相应操作命令
+	// 和参数后返回。否则就执行寻道处理，于是首先置软盘中断处理调用函数为寻道中断函数。
+	// 如果起始磁道号不等于零则发送磁头寻道命令和参数。所使用的参数即是第112-一121行
+	// 上设置的全局变量值。如果起始磁道号seek_track为0，则执行重新校正命令让磁头归零位。
 	if (!seek) {
-		setup_rw_floppy();
+		setup_rw_floppy();		//发送命令参数块
 		return;
 	}
-	do_floppy = seek_interrupt;
-	if (seek_track) {
-		output_byte(FD_SEEK);
-		output_byte(head<<2 | current_drive);
-		output_byte(seek_track);
+	do_floppy = seek_interrupt;	//寻道中断调用函数
+	if (seek_track) {			//起始磁道号
+		output_byte(FD_SEEK);	//发送磁头寻道命令
+		output_byte(head<<2 | current_drive);//发送参数:磁头号+当前软驱号
+		output_byte(seek_track);//发送参数:磁道号
 	} else {
-		output_byte(FD_RECALIBRATE);
-		output_byte(head<<2 | current_drive);
+		output_byte(FD_RECALIBRATE);		//发送重新校正命令(磁头归零)
+		output_byte(head<<2 | current_drive);//发送参数:磁头号+当前磁道号
 	}
+	// 同样地，若上面任何一个output_byte操作执行出错，则复位标志reset就会被置位。
+	// 若reset真的被置位了，就立刻去执行do_fd_request中的复位处理代码。
 	if (reset)
 		do_fd_request();
 }
 
 /*
- * Special case - used after a unexpected interrupt (or reset)
+ * Special case - used after a unexpected interrupt (or reset) 特殊情况--用于意外中断(或复位)处理后
  */
+// 软驱重新校正中断调用函数。
+// 首先发送检测中断状态命令（无参数），如果返回结果表明出错，则置复位标志。否则重新
+// 校正标志清零。然后再次执行软盘请求项处理函数作相应操作。
 static void recal_interrupt(void)
 {
-	output_byte(FD_SENSEI);
-	if (result()!=2 || (ST0 & 0xE0) == 0x60)
+	output_byte(FD_SENSEI);						// 发送检测中断状态命令
+	if (result()!=2 || (ST0 & 0xE0) == 0x60)	// 如果返回结果字节数不等于2或命令异常结束,则置复位标志
 		reset = 1;
 	else
-		recalibrate = 0;
+		recalibrate = 0;						// 否则重新校正
 	do_fd_request();
 }
 
+// 意外软盘中断请求引发的软盘中断处理程序中调用的函数
 void unexpected_floppy_interrupt(void)
 {
 	output_byte(FD_SENSEI);
@@ -471,61 +488,90 @@ void unexpected_floppy_interrupt(void)
 		recalibrate = 1;
 }
 
+// 软盘重新校正处理函数。
+// 向软盘控制器FDC发送重新校正命令和参数，并复位重新校正标志。当软盘控制器执行完
+// 重新校正命令就会再其引发的软盘中断中调用recal_interruptO函数。
 static void recalibrate_floppy(void)
 {
 	recalibrate = 0;
 	current_track = 0;
 	do_floppy = recal_interrupt;
-	output_byte(FD_RECALIBRATE);
+	output_byte(FD_RECALIBRATE);			//命令:重新校正
 	output_byte(head<<2 | current_drive);
 	if (reset)
 		do_fd_request();
 }
 
+// 软盘控制器FDC复位中断调用函数。
+// 该函数会在向控制器发送了复位操作命令后引发的软盘中断处理程序中被调用。
+// 首先发送检测中断状态命令（无参数），然后读出返回的结果字节。接着发送设定软驱
+// 参数命令和相关参数，最后再次调用请求项处理函数do_fd_request去执行重新校正
+// 操作。但由于执行output_byte函数出错时复位标志又会被置位，因此也可能再次去
+// 执行复位处理。
 static void reset_interrupt(void)
 {
-	output_byte(FD_SENSEI);
-	(void) result();
-	output_byte(FD_SPECIFY);
-	output_byte(cur_spec1);		/* hut etc */
+	output_byte(FD_SENSEI);		//发送检测中断状态命令
+	(void) result();			//读取命令执行结果字节
+	output_byte(FD_SPECIFY);	//发送设定软驱参数命令
+	output_byte(cur_spec1);		/* hut etc */	//发送参数
 	output_byte(6);			/* Head load time =6ms, DMA */
 	do_fd_request();
 }
 
 /*
- * reset is done by pulling bit 2 of DOR low for a while.
+ * reset is done by pulling bit 2 of DOR low for a while. 
+ * FDC复位是通过将数字输出寄存器(D0R)位2置0实现的
  */
+// 该函数首先设置参数和标志，把复位标志清0，然后把软驱变量cur_specl和cur_rate
+// 置为无效。因为复位操作后，这两个参数就需要重新设置。接着设置需要重新校正标志，
+// 并设置FDC执行复位操作后引发的软盘中断中调用的C函数reset_interrupt。最后
+// 把DOR寄存器位2置0一段时间以对软驱执行复位操作。当前数字输出寄存器DOR的位2
+// 是启动/复位软驱位。
 static void reset_floppy(void)
 {
 	int i;
 
-	reset = 0;
-	cur_spec1 = -1;
+	reset = 0;							//复位标志位置0
+	cur_spec1 = -1;						//使无效
 	cur_rate = -1;
-	recalibrate = 1;
-	printk("Reset-floppy called\n\r");
-	cli();
-	do_floppy = reset_interrupt;
-	outb_p(current_DOR & ~0x04,FD_DOR);
+	recalibrate = 1;					//重新校正标志置位
+	printk("Reset-floppy called\n\r");	//显示执行软盘复位操作信息
+	cli();								//关中断
+	do_floppy = reset_interrupt;		//设置在中断处理程序中调用的函数
+	outb_p(current_DOR & ~0x04,FD_DOR);	//对软盘控制器FDC执行复位操作
 	for (i=0 ; i<100 ; i++)
 		__asm__("nop");
-	outb(current_DOR,FD_DOR);
-	sti();
+	outb(current_DOR,FD_DOR);			//再启动FDC
+	sti();								//开中断
 }
 
+// 软驱启动定时中断调用函数。
+// 在执行一个请求项要求的操作之前，为了等待指定软驱马达旋转起来到达正常的工作转速，
+// do_fd_request函数为准备好的当前请求项添加了一个延时定时器。本函数即是该定时器
+// 到期时调用的函数。它首先检查数字输出寄存器（DOR),使其选择当前指定的驱动器。然后
+// 调用执行软盘读写传输函数transfer
 static void floppy_on_interrupt(void)
 {
-/* We cannot do a floppy-select, as that might sleep. We just force it */
-	selected = 1;
+	// 我们不能任意设置选择的软驱，因为这可能会引起进程睡眠。我们只是迫使它自己选择
+	// 如果当前驱动器号与数字输出寄存器DOR中的不同，则需要重新设置DOR为当前驱动器。
+	// 在向数字输出寄存器输出当前DOR以后，使用定时器延迟2个滴答时间，以让命令得到执
+	// 行。然后调用软盘读写传输函数transfer。若当前驱动器与DOR中的相符，那么就可以
+	// 直接调用软盘读写传输函数
+	/* We cannot do a floppy-select, as that might sleep. We just force it */
+	selected = 1;								// 置已选定当前驱动器标志
 	if (current_drive != (current_DOR & 3)) {
 		current_DOR &= 0xFC;
 		current_DOR |= current_drive;
-		outb(current_DOR,FD_DOR);
-		add_timer(2,&transfer);
+		outb(current_DOR,FD_DOR);				// 向数字输出寄存器输出当前DOR
+		add_timer(2,&transfer);					// 添加定时器并执行传输函数
 	} else
-		transfer();
+		transfer();								// 执行软盘读写传输函数
 }
 
+// 软盘读写请求项处理函数，
+// 该函数是软盘驱动程序中最主要的函数。主要作用是：1处理有复位标志或重新校正标志置
+// 位情况; 2利用请求项中的设备号计算取得请求项指定软驱的参数块; 3利用内核定时器启
+// 动软盘读/写操作。
 void do_fd_request(void)
 {
 	unsigned int block;
@@ -539,21 +585,34 @@ void do_fd_request(void)
 		recalibrate_floppy();
 		return;
 	}
+	// 本函数的真正功能从这里开始。首先利用blk.h文件中的INIT_REQUEST宏来检测请求项的
+	// 合法性，如果已没有请求项则退出（参见blk.h)。然后利用请求项中的设备号取得请
+	// 求项指定软驱的参数块。这个参数块将在下面用于设置软盘操作使用的全局变量参数块。
+	// 请求项设备号中的软盘类型(MINOR(CURRENT->dev)>2)被用作磁盘类型数组floppy_type[]的索引值来取得指定软驱的参数块。
 	INIT_REQUEST;
 	floppy = (MINOR(CURRENT->dev)>>2) + floppy_type;
+	// 下面开始设置112--122行上的全局变量值。如果当前驱动器号current_drive不是请求项
+	// 中指定的驱动器号，则置标志seek,表示在执行读/写操作之前需要先让驱动器执行寻道处
+	// 理。然后把当前驱动器号设置为请求项中指定的驱动器号，
 	if (current_drive != CURRENT_DEV)
 		seek = 1;
 	current_drive = CURRENT_DEV;
+	// 设置读写起始扇区block。因为每次读写是以块为单位(1块为2个扇区)，所以起始扇区
+	// 需要起码比磁盘总扇区数小2个扇区。否则说明这个请求项参数无效，结束该次软盘请求项
+	// 去执行下一个请求项。
 	block = CURRENT->sector;
 	if (block+2 > floppy->size) {
 		end_request(0);
 		goto repeat;
 	}
+	// 再求对应在磁道上的扇区号、磁头号、磁道号、搜寻磁道号
 	sector = block % floppy->sect;
 	block /= floppy->sect;
 	head = block % floppy->head;
 	track = block / floppy->head;
 	seek_track = track << floppy->stretch;
+	// 再看看是否还需要首先执行寻道操作。如果寻道号与当前磁头所在磁道号不同，则需要进行
+	// 寻道操作，于是置需要寻道标志seek。最后我们设置执行的软盘命令command。
 	if (seek_track != current_track)
 		seek = 1;
 	sector++;
@@ -563,11 +622,23 @@ void do_fd_request(void)
 		command = FD_WRITE;
 	else
 		panic("do_fd_request: unknown command");
+
+	// 在上面设置好112一122行上所有全局变量值之后，我们可以开始执行请求项操作了。该操
+	// 作利用定时器来启动。因为为了能对软驱进行读写操作，需要首先启动驱动器马达并达到正
+	// 常运转速度。而这需要一定的时间。因此这里利用ticks_to_floppy_on来计算启动延时
+	// 时间，然后使用该延时设定一个定时器。当时间到时就调用函数floppy_on_interrupt
 	add_timer(ticks_to_floppy_on(current_drive),&floppy_on_interrupt);
 }
 
+
+// 软盘系统初始化
+// 设置软盘块设备请求项的处理函数do_fd_request,并设置软盘中断门(int0x26,对应
+// 硬件中断请求信号IRQ6)。然后取消对该中断信号的屏蔽，以允许软盘控制器FDC发送中
+// 断请求信号。中断描述符表IDT中陷阱门描述符设置宏set_trap_gate在asm/system.h中定义
 void floppy_init(void)
 {
+	// 设置软盘中断门描述符。floppy_interrupt(kernel/system_call.s)是其中断处
+	// 理过程。中断号为it0x26(38),对应8259A芯片中断请求信号IRQ6,
 	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
 	set_trap_gate(0x26,&floppy_interrupt);
 	outb(inb_p(0x21)&~0x40,0x21);

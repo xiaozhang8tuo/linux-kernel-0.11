@@ -70,7 +70,7 @@ static inline void unlock_buffer(struct buffer_head * bh)
  * add-request adds a request to the linked list.
  * It disables interrupts so that it can muck with the
  * request-lists in peace.
- * add-request向链表中加入一项请求项。它会关闭中断，这样就能安全地处理请求链表了
+ * add-request向链表中加入一项请求项。它会关闭中断，这样就能安全地处理请求链表了 	
  */
 static void add_request(struct blk_dev_struct * dev, struct request * req)
 {
@@ -79,7 +79,7 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 	// 首先再进一步对参数提供的请求项的指针和标志作初始设置。置空请求项中的下一请求项指
 	// 针，关中断并清除请求项相关缓冲区脏标志。
 	req->next = NULL;
-	cli();
+	cli();					// https://blog.csdn.net/yxc135/article/details/8789988 关中断并不会导致中断丢失,只是延迟处理
 	if (req->bh)
 		req->bh->b_dirt = 0;	//清缓冲区脏标志
 	
