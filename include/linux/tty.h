@@ -28,7 +28,7 @@ struct tty_queue {
 //			  tail(100)		    		head(900):则下一次在900处写数据，写完head走到901
 
 #define INC(a) ((a) = ((a)+1) & (TTY_BUF_SIZE-1))		// a缓冲区指针前移1字节，若已超出缓冲区右侧，则指针循环。
-#define DEC(a) ((a) = ((a)-1) & (TTY_BUF_SIZE-1))		// a缓冲区指针后退】字节，并循环。
+#define DEC(a) ((a) = ((a)-1) & (TTY_BUF_SIZE-1))		// a缓冲区指针后退1字节，并循环。
 #define EMPTY(a) ((a).head == (a).tail)					// 清空指定队列的缓冲区
 #define LEFT(a) (((a).tail-(a).head-1)&(TTY_BUF_SIZE-1))// 缓冲区还可存放字符的长度（空闲区长度）
 #define LAST(a) ((a).buf[(TTY_BUF_SIZE-1)&((a).head-1)])// 缓冲区中最后一个位置
