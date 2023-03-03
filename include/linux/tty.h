@@ -60,7 +60,7 @@ struct tty_struct {
 	struct tty_queue secondary;				//tty辅助队列(存放规范模式字符序列)// 规范模式队列
 };
 
-extern struct tty_struct tty_table[];	//tty结构数组
+extern struct tty_struct tty_table[];	//tty结构数组 tty_io.c中定义
 
 // 这里给出了终端termios结构中可更改的特珠字符数组c_cc[]的初始值。该termios结构
 // 定义在include/termios.h中。如果定义了_POSIX_VDISABLE(\0),那么当某一项值等于
