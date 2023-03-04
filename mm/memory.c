@@ -158,8 +158,8 @@ int free_page_tables(unsigned long from,unsigned long size)
 
 	// 然后计算参数size给出的长度所占的页目录项数(4MB的进位整数倍)，也即所占页表数。
 	// 因为1个页表可管理4MB物理内存，所以这里用右移22位的方式把需要复制的内存长度值
-	// 除以4MB。其中加上0x3fffff(即4b-1)用于得到进位整数倍结果，即除操作若有余数
-	// 则进1。例如，如果原size=4.01b,那么可得到结果size=2。
+	// 除以4MB。其中加上0x3fffff(即4MB-1)用于得到进位整数倍结果，即除操作若有余数
+	// 则进1。例如，如果原size=4.01MB,那么可得到结果size=2。
 	size = (size + 0x3fffff) >> 22;
 	
 	// 接着计算给出的线性基地址对应的起始目录项。对应的目录项号from>>22。因为每项占4字节，并且由于
@@ -327,7 +327,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 // 页缘故而对页表作修改时，并不需要刷新CPU的页变换缓冲（或称Translation Lookaside
 // Buffer-TLB),即使页表项中标志P被从0修改成1。因为无效页项不会被缓冲，因此当
 // 修改了一个无效的页表项时不需要刷新。在此就表现为不用调用Invalidate()函数。
-// 参数page是分配的主内存区中某一页面（页帧，页框）的指针；āddress是线性地址。
+// 参数page是分配的主内存区中某一页面（页帧，页框）的指针；address是线性地址。
 unsigned long put_page(unsigned long page,unsigned long address)
 {
 	unsigned long tmp, *page_table;
@@ -354,8 +354,8 @@ unsigned long put_page(unsigned long page,unsigned long address)
 	else {
 		if (!(tmp=get_free_page()))
 			return 0;
-		*page_table = tmp|7;
-		page_table = (unsigned long *) tmp;
+		*page_table = tmp|7;// 页目录项 中 填入该页表地址
+		page_table = (unsigned long *) tmp;// page_table指向刚分配的页表
 	}
 	// 最后在找到的页表page_table中设置相关页表项内容，即把物理页面page的地址填入表
 	// 项同时置位3个标志(U/S、WR、P)。该页表项在页表中的索引值等于线性地址位21-
@@ -450,8 +450,10 @@ void do_wp_page(unsigned long error_code,unsigned long address)
 	// 3: 由1中页表项在页表中偏移地址 加上 2中目录表项内容中对应页表的物理地址即可
 	// 得到页表项的指针（物理地址）。这里对共享的页面进行复制。
 	un_wp_page((unsigned long *)
-		(((address>>10) & 0xffc) + (0xfffff000 &
-		*((unsigned long *) ((address>>20) &0xffc)))));
+		(
+			((address>>10) & 0xffc) + 	/*页表项在表中的偏移地址   */								// 1
+			(0xfffff000 & *((unsigned long *) ((address>>20) &0xffc)))	/*二级页表(起始地址)  */	// a   此时相加a+1, 若取地址即 un_wp_page中的 *table_entry = *(a+1) = a[1] = 页表项
+		));
 
 }
 
@@ -528,32 +530,30 @@ static int try_to_share(unsigned long address, struct task_struct * p)
 	// 首先分别求得指定进程p中和当前进程中逻辑地址address对应的页目录项。为了计算方便
 	// 先求出指定逻辑地址address处的'逻辑'页目录项号，即以进程空间(0~64MB)算出的页
 	// 目录项号。该'逻辑'页目录项号加上进程p在CPU 4G线性空间中起始地址对应的页目录项,
-	// 即得到进程p中地址address处页面所对应的4G线性空间中的实际页目录项from_page.
+	// 即得到进程p中地址address处页面所对应的4G线性空间中的实际页目录项from_page
 	// 而'逻辑'页目录项号加上当前进程CPU4G线性空间中起始地址对应的页目录项，即可最后
-	// 得到当前进程中地址address处页面所对应的4G线性空间中的实际页目录项to_page。
+	// 得到当前进程中地址address处页面所对应的4G线性空间中的实际页目录项to_page
 	from_page = to_page = ((address>>20) & 0xffc);
 	from_page += ((p->start_code>>20) & 0xffc);			//p进程目录项
-	to_page += ((current->start_code>>20) & 0xffc);
+	to_page += ((current->start_code>>20) & 0xffc);		//当前进程目录项     逻辑地址和线性地址就是这么转化的
 
 	// 在得到p进程和当前进程address对应的目录项后，下面分别对进程p和当前进程进行处理。
 	// 下面首先对p进程的表项进行操作。目标是取得p进程中address对应的物理内存页面地址，
 	// 并且该物理页面存在，而且干净（没有被修改过，不脏）。
-	// 方法是先取目录项内容。如果该目录项无效(P=0),表示目录项对应的二级页表不存在，
-	// 于是返回。否则取该目录项对应页表地址from,从而计算出逻辑地址address对应的页表项
-	// 指针，并取出该页表项内容临时保存在phys_addr中。
 	/* is there a page-directory at from? */
-	from = *(unsigned long *) from_page;
+	from = *(unsigned long *) from_page;	// 取目录项内容。如果该目录项无效(P=0),表示目录项对应的二级页表不存在，于是返回
 	if (!(from & 1))
 		return 0;
-	from &= 0xfffff000;
-	from_page = from + ((address>>10) & 0xffc);
-	phys_addr = *(unsigned long *) from_page;
+
+	from &= 0xfffff000;						 	// 否则取该目录项对应页表地址from,从而计算出逻辑地址address对应的页表项指针，并取出该页表项内容临时保存在phys_addr中。
+	from_page = from + ((address>>10) & 0xffc); // 页表地址+页表项偏移量
+	phys_addr = *(unsigned long *) from_page;	// 页表项(放着页对应的物理地址)
 
 	/* is the page clean and present? */ //物理页面存在且干净吗
 	// 接着看看页表项映射的物理页面是否存在并且干净。0x41对应页表项中的D(Dirty)和
 	// P(Present)标志。如果页面不干净或无效则返回。然后我们从该表项中取出物理页面地址
 	// 再保存在phys_addr中。最后我们再检查一下这个物理页面地址的有效性，即它不应该超过
-	// 机器最大物理地址值，也不应该小于内存低端(1B)。
+	// 机器最大物理地址值，也不应该小于内存低端(1MB)。
 	if ((phys_addr & 0x41) != 0x01)
 		return 0;
 	phys_addr &= 0xfffff000;
@@ -571,7 +571,7 @@ static int try_to_share(unsigned long address, struct task_struct * p)
 		else
 			oom();
 	
-	// 否则取目录项中的页表地址-->t0，加上页表项索值<<2，即页表项在表中偏移地址，得到
+	// 否则取目录项中的页表地址-->to，加上页表项索值<<2，即页表项在表中偏移地址，得到
 	// 页表项地址to_page。针对该页表项，如果此时我们检查出其对应的物理页面已经存在，
 	// 即页表项的存在位P=1, 则说明原本我们想共享进程p中对应的物理页面，但现在我们自己
 	// 已经占有了（映射有）物理页面。于是说明内核出错，死机。
@@ -670,7 +670,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	// 首先取线性空间中指定地址address处页面地址。从而可算出指定线性地址在进程空间中
 	// 相对于进程基址的偏移长度值p,即对应的逻辑地址。
 	address &= 0xfffff000;					//address处缺页页面线性地址
-	tmp = address - current->start_code;	//缺页页面对应的逻辑地址  即start_code记录的也是address地址
+	tmp = address - current->start_code;	//两个线性地址相减得到缺页页面对应的逻辑地址  即start_code记录的也是线性地址   逻辑地址和线性地址就是这么转化的
 
 	// 若当前进程的executable节点指针空，或者指定地址超出（代码+数据）长度，则申请
 	// 一页物理内存，并映射到指定的线性地址处。executable是进程正在运行的执行文件的i
@@ -700,7 +700,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	// 缺少的页面在执行映像文件中的起始块号block。根据这个块号和执行文件的i节点，我们
 	// 就可以从映射位图中找到对应块设备中对应的设备逻辑块号（保存在nr[]数组中）。利用
 	// bread_page即可把这4个逻辑块读入到物理页面page中。
-	block = 1 + tmp/BLOCK_SIZE;							// 执行文件中起始数据块号
+	block = 1 + tmp/BLOCK_SIZE;							// 执行文件中起始数据块号  (加载代码段, 据此可知, 跑多个可执行程序实际用的是一个代码段(只读所以疯狂共享))
 	for (i=0 ; i<4 ; block++,i++)
 		nr[i] = bmap(current->executable,block);		// 设备上对应的逻辑块号
 	bread_page(page,current->executable->i_dev,nr);		// 读设备上4个逻辑块
