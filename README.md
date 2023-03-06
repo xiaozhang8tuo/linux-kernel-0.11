@@ -2,9 +2,13 @@
 
 ![image-20230306000429067](.assets/image-20230306000429067.png)
 
-todo：
+- linux的缓冲区设计：[buffer它到底做了个啥，源码级分析linux内核的文件系统的缓冲区](https://blog.csdn.net/qq_41565920/article/details/129370299?spm=1001.2014.3001.5502)
 
-- linux的缓冲区设计
+![image-20230306224155204](.assets/image-20230306224155204.png)
+
+![image-20230306224247227](.assets/image-20230306224247227.png)
+
+todo：
 
 - linux的文件系统设计
 
