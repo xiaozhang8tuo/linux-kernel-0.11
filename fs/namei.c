@@ -268,8 +268,7 @@ static struct buffer_head * add_entry(struct m_inode * dir,
 		if ((char *)de >= BLOCK_SIZE+bh->b_data) {
 			brelse(bh);
 			bh = NULL;
-			block = 
-			(dir,i/DIR_ENTRIES_PER_BLOCK);
+			block = create_block(dir,i/DIR_ENTRIES_PER_BLOCK);
 			if (!block)
 				return NULL;
 			if (!(bh = bread(dir->i_dev,block))) {

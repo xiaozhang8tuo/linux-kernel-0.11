@@ -158,8 +158,8 @@ int new_block(int dev)
 	
 	// 最后将新逻辑块清零，并设置其已更新标志和已修改标志。然后释放对应缓冲块，返回逻辑辑块号
 	clear_block(bh->b_data);
-	bh->b_uptodate = 1;		//?  
-	bh->b_dirt = 1;			//?
+	bh->b_uptodate = 1;		// 数据是最新,刚分配是还调用了set_bit修改了位图
+	bh->b_dirt = 1;			// 数据确实修改过,是一块新的blk,需要回写
 	brelse(bh);
 	return j;
 }
