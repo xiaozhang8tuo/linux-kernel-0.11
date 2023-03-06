@@ -273,7 +273,7 @@ OK,下面是getblk函数，该函数的逻辑并不是很清晰，同样也是�
  * The algoritm is changed: hopefully better, and an elusive bug removed.
  */
 
-// 下面宏用于同时判断缓冲区的修改标志和锁定标志，并且定义修改标志的权重要比锁定标志大。
+// 下面宏用于同时判断缓冲区的修改标志和锁定标志，并且定义修改标志的权重要比锁定标志大。即lock的块要比dirt的块更容易等到cnt==0
 #define BADNESS(bh) (((bh)->b_dirt<<1)+(bh)->b_lock)
 
 // 取高速缓冲中指定的缓冲块。
