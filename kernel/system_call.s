@@ -327,7 +327,7 @@ _sys_fork:
 ; 当请求的硬盘操作完成或出错就会发出此中断信号。（参见kernel/blk_drv/hd.c)。
 ; 首先向8259A中断控制从芯片发送结束硬件中断指令(EOI),然后取变量do_hd中的函数指针放入edx
 ; 寄存器中，并置do_hd为NULL,接着判断edx函数指针是否为空。如果为空，则给edx赋值指向
-; unexpected_hd_interrupt(),用于显示出错信总。随后向8259A主芯片送EOI指令，并调用edx中
+; unexpected_hd_interrupt(),用于显示出错信息。随后向8259A主芯片送EOI指令，并调用edx中
 ; 指针指向的函数：read_intr()、write_intr()或unexpected_hd_interrupt()
 _hd_interrupt:
 	pushl %eax
