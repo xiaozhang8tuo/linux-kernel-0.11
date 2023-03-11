@@ -8,8 +8,12 @@
 
 ![image-20230306224247227](.assets/image-20230306224247227.png)
 
-todo：
 
-- linux的文件系统设计
+
+- linux的文件系统设计：[inode和逻辑块，目录的结构，挂载的实现 源码级分析linux内核的文件系统的结构](https://blog.csdn.net/qq_41565920/article/details/129444739)
+
+![image-20230311183052189](.assets/image-20230311183052189.png)
+
+todo：
 
 - linux的进程调度设计

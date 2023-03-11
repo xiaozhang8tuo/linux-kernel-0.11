@@ -305,7 +305,7 @@ int sys_umount(char * dev_name)
 // 安装文件系统（系统调用）。
 // 参数dev_name是设备文件名，dir_name是安装到的目录名，rw_flag被安装文件系统的可
 // 读写标志。将被加载的地方必须是一个目录名，并且对应的节点没有被其他程序占用。
-// 若操作成功则返回0，否则返回出错号。
+// 若操作成功则返回0，否则返回出错号。mount -o ro /dev/hda1 /mnt
 int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 {
 	struct m_inode * dev_i, * dir_i;
